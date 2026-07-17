@@ -11,9 +11,13 @@ const writeWf = (name, obj) => {
   console.log('Built workflows/' + name);
 };
 
+const PG_CRED = { postgres: { id: '__PG_CRED_ID__', name: 'Dental Postgres' } };
+
 // ---------------- 01_ingestion_pipeline ----------------
 const discover = read('scraping/discover.js');
 const fetchClean = read('scraping/fetch_clean.js');
+const preparePages = read('scraping/prepare_pages.js');
+const upsertPagesSql = read('db/queries/upsert_pages_bulk.sql');
 
 writeWf('01_ingestion_pipeline.json', {
   name: '01_ingestion_pipeline',
@@ -43,10 +47,33 @@ writeWf('01_ingestion_pipeline.json', {
       typeVersion: 2,
       position: [380, 0],
     },
+    {
+      parameters: { jsCode: preparePages },
+      id: 'a1000000-0000-0000-0000-000000000004',
+      name: 'PreparePages',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: [620, 0],
+    },
+    {
+      parameters: {
+        operation: 'executeQuery',
+        query: upsertPagesSql,
+        options: { queryReplacement: '={{ [$json.website_url, $json.pages_json] }}' },
+      },
+      id: 'a1000000-0000-0000-0000-000000000005',
+      name: 'StorePages',
+      type: 'n8n-nodes-base.postgres',
+      typeVersion: 2.6,
+      position: [860, 0],
+      credentials: PG_CRED,
+    },
   ],
   connections: {
     Webhook: { main: [[{ node: 'Discover', type: 'main', index: 0 }]] },
     Discover: { main: [[{ node: 'FetchClean', type: 'main', index: 0 }]] },
+    FetchClean: { main: [[{ node: 'PreparePages', type: 'main', index: 0 }]] },
+    PreparePages: { main: [[{ node: 'StorePages', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });

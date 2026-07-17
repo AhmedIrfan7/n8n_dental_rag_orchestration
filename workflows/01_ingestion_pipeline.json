@@ -44,6 +44,42 @@
         380,
         0
       ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare stage — n8n Code node (Run Once for All Items).\n// Collapses all cleaned page items into ONE item carrying a JSON array, so the\n// DB write is a single bulk insert with just two bound params (website_url + JSON).\nconst items = $input.all();\nconst website_url = items.length ? items[0].json.website_url : '';\nconst pages = items.map(function (it) {\n  return {\n    url: it.json.url,\n    url_hash: it.json.url_hash,\n    page_type: it.json.page_type,\n    title: it.json.title || '',\n    clean_text: it.json.clean_text || '',\n    status_code: it.json.status_code || 0,\n  };\n});\nreturn [{ json: { website_url, page_count: pages.length, pages_json: JSON.stringify(pages) } }];\n"
+      },
+      "id": "a1000000-0000-0000-0000-000000000004",
+      "name": "PreparePages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        620,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Bulk-upsert crawled pages into pages_raw, ensuring the clinic row exists.\n-- Params: $1 website_url (text), $2 pages (JSON array string)\n-- Each page object: { url, url_hash, page_type, title, clean_text, status_code }\nWITH c AS (\n  INSERT INTO clinic (website_url) VALUES ($1)\n  ON CONFLICT (website_url) DO UPDATE SET website_url = EXCLUDED.website_url\n  RETURNING id\n)\nINSERT INTO pages_raw (clinic_id, url, url_hash, page_type, title, clean_text, status_code)\nSELECT c.id, p.url, p.url_hash, p.page_type, p.title, p.clean_text, p.status_code\nFROM c,\n     jsonb_to_recordset($2::jsonb) AS p(\n       url text, url_hash text, page_type text, title text, clean_text text, status_code int\n     )\nON CONFLICT (url_hash) DO UPDATE SET\n  clean_text  = EXCLUDED.clean_text,\n  page_type   = EXCLUDED.page_type,\n  title       = EXCLUDED.title,\n  status_code = EXCLUDED.status_code,\n  fetched_at  = now()\nRETURNING id, page_type;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.website_url, $json.pages_json] }}"
+        }
+      },
+      "id": "a1000000-0000-0000-0000-000000000005",
+      "name": "StorePages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        860,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
     }
   ],
   "connections": {
@@ -63,6 +99,28 @@
         [
           {
             "node": "FetchClean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FetchClean": {
+      "main": [
+        [
+          {
+            "node": "PreparePages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PreparePages": {
+      "main": [
+        [
+          {
+            "node": "StorePages",
             "type": "main",
             "index": 0
           }
