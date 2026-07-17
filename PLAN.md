@@ -1,7 +1,7 @@
 # Project Plan — Dental Clinic RAG Voice Assistant (n8n Agent Orchestration)
 
 **Repo:** `AhmedIrfan7/n8n_dental_rag_orchestration`
-**Author (sole contributor):** AhmedIrfan7 `<ahmedirfan4560@gmail.com>` — no other contributors, no Co-Authored-By trailers.
+**Author:** AhmedIrfan7 `<ahmedirfan4560@gmail.com>` — no other contributors, no Co-Authored-By trailers.
 **Target clinic:** https://www.deroodeortho.com/ (generic — any clinic URL re-ingests end-to-end).
 
 ## Locked decisions
