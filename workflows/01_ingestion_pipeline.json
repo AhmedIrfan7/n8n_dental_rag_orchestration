@@ -1,0 +1,52 @@
+{
+  "name": "01_ingestion_pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ingest",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a1000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -100,
+        0
+      ],
+      "webhookId": "a1000000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Discover stage — n8n Code node (Run Once for All Items).\n// Input : { website_url } (webhook body). Output: one item per same-domain page URL.\n// NOTE: the n8n JS Task Runner sandbox does NOT expose the global `URL` — all URL\n// parsing/joining here is done with plain string ops. Only this.helpers.httpRequest\n// is available for HTTP.\n\ntry {\n  const helpers = this.helpers;\n  const input = $input.first().json;\n  const body = (input && input.body) ? input.body : (input || {});\n  let website = String(body.website_url || (input && input.website_url) || '').trim();\n  if (!website) { throw new Error('website_url is required'); }\n  if (!/^https?:\\/\\//i.test(website)) website = 'https://' + website;\n\n  function parseUrl(str) {\n    const m = String(str).match(/^(https?:)\\/\\/([^\\/:?#]+)(:\\d+)?([^?#]*)/i);\n    if (!m) return null;\n    const host = m[2];\n    return { protocol: m[1], host, port: m[3] || '', path: m[4] || '/', origin: m[1] + '//' + host + (m[3] || '') };\n  }\n  const startParsed = parseUrl(website);\n  if (!startParsed) throw new Error('invalid website_url: ' + website);\n  const startUrl = website;\n  const origin = startParsed.origin;\n  const baseDomain = startParsed.host.replace(/^www\\./, '');\n  const maxPages = parseInt(body.max_pages || 80, 10);\n  const ua = body.user_agent || 'DentalRAGBot/1.0';\n\n  function hostOf(url) { const p = parseUrl(url); return p ? p.host.replace(/^www\\./, '') : null; }\n  function sameDomain(url) { return hostOf(url) === baseDomain; }\n  function resolveUrl(href) {\n    href = String(href).trim();\n    if (/^https?:\\/\\//i.test(href)) return href;\n    if (/^\\/\\//.test(href)) return 'https:' + href;\n    if (href.charAt(0) === '/') return origin + href;\n    if (/^(mailto:|tel:|javascript:|#)/i.test(href)) return null;\n    return origin + '/' + href.replace(/^\\.?\\//, '');\n  }\n\n  async function fetchText(url) {\n    try {\n      const res = await helpers.httpRequest({ url, method: 'GET', headers: { 'User-Agent': ua }, json: false });\n      return typeof res === 'string' ? res : String(res);\n    } catch (e) { return null; }\n  }\n\n  const found = new Set();\n  const sitemaps = [];\n\n  const robots = await fetchText(origin + '/robots.txt');\n  if (robots) {\n    for (const line of robots.split(/\\r?\\n/)) {\n      const m = line.match(/^\\s*sitemap:\\s*(\\S+)/i);\n      if (m) sitemaps.push(m[1].trim());\n    }\n  }\n  if (sitemaps.length === 0) sitemaps.push(origin + '/sitemap.xml');\n\n  const seen = new Set();\n  const queue = sitemaps.slice();\n  let walked = 0;\n  while (queue.length && walked < 25 && found.size < maxPages) {\n    const sm = queue.shift();\n    if (seen.has(sm)) continue;\n    seen.add(sm); walked++;\n    const xml = await fetchText(sm);\n    if (!xml) continue;\n    const locs = (xml.match(/<loc>\\s*[^<\\s]+\\s*<\\/loc>/gi) || []).map(function (t) {\n      return t.replace(/<\\/?loc>/gi, '').trim();\n    });\n    for (const loc of locs) {\n      if (/\\.xml(\\?|$)/i.test(loc)) queue.push(loc);\n      else if (sameDomain(loc)) found.add(loc.split('#')[0]);\n      if (found.size >= maxPages) break;\n    }\n  }\n\n  let discovery = 'sitemap';\n  if (found.size === 0) {\n    discovery = 'crawl';\n    found.add(startUrl);\n    const html = await fetchText(startUrl);\n    if (html) {\n      const hrefs = (html.match(/href=[\"'][^\"']+[\"']/gi) || []).map(function (h) {\n        return h.replace(/^href=[\"']/i, '').replace(/[\"']$/, '');\n      });\n      for (let href of hrefs) {\n        const abs = resolveUrl(href);\n        if (abs && sameDomain(abs) && !/\\.(png|jpe?g|gif|svg|pdf|zip|css|js|ico|woff2?|mp4|webp)(\\?|$)/i.test(abs)) {\n          found.add(abs.split('#')[0]);\n        }\n        if (found.size >= maxPages) break;\n      }\n    }\n  }\n\n  const urls = Array.from(found).slice(0, maxPages);\n  return urls.map(function (url) {\n    return { json: { website_url: startUrl, origin, base_domain: baseDomain, discovery, url } };\n  });\n} catch (err) {\n  return [{ json: { __discover_error: String((err && err.message) || err) } }];\n}\n"
+      },
+      "id": "a1000000-0000-0000-0000-000000000002",
+      "name": "Discover",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Discover",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

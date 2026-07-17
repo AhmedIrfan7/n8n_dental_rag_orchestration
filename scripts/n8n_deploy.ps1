@@ -24,28 +24,36 @@ $sess = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 Invoke-WebRequest "$base/rest/login" -Method Post -Body (@{emailOrLdapLoginId=$email;password=$pass}|ConvertTo-Json) -ContentType "application/json" -WebSession $sess -UseBasicParsing -TimeoutSec 20 | Out-Null
 
 # --- read + substitute placeholders ---
+# Send the raw (substituted) JSON directly. Do NOT round-trip through
+# PowerShell ConvertTo-Json — 5.1 mangles large multi-line jsCode strings.
+# Workflow files contain exactly {name, nodes, connections, settings}.
 $raw = Get-Content $File -Raw
 $raw = $raw.Replace('__PG_CRED_ID__', $envMap['N8N_PG_CRED_ID'])
 $wf  = $raw | ConvertFrom-Json
 $name = $wf.name
+$payload = $raw
 
 # --- upsert by name ---
+$bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($payload)   # avoid PS 5.1 body mis-encoding
 $existing = (Invoke-RestMethod "$base/rest/workflows" -WebSession $sess).data | Where-Object { $_.name -eq $name }
-$payload = @{ name=$wf.name; nodes=$wf.nodes; connections=$wf.connections; settings=$wf.settings } | ConvertTo-Json -Depth 40
 if ($existing) {
   $id = $existing[0].id
-  Invoke-RestMethod "$base/rest/workflows/$id" -Method Patch -Body $payload -ContentType "application/json" -WebSession $sess | Out-Null
+  Invoke-RestMethod "$base/rest/workflows/$id" -Method Patch -Body $bodyBytes -ContentType "application/json" -WebSession $sess | Out-Null
   Write-Host "Updated workflow '$name' (id=$id)" -ForegroundColor Green
 } else {
-  $created = (Invoke-RestMethod "$base/rest/workflows" -Method Post -Body $payload -ContentType "application/json" -WebSession $sess).data
+  $created = (Invoke-RestMethod "$base/rest/workflows" -Method Post -Body $bodyBytes -ContentType "application/json" -WebSession $sess).data
   $id = $created.id
   Write-Host "Created workflow '$name' (id=$id)" -ForegroundColor Green
 }
 
-# --- activate ---
+# --- activate (n8n 2.x: publish the version, flip active, restart to register webhooks) ---
 if ($Activate) {
+  docker exec dental-n8n n8n publish:workflow --id=$id 2>&1 | Out-Null
   Invoke-RestMethod "$base/rest/workflows/$id" -Method Patch -Body '{"active":true}' -ContentType "application/json" -WebSession $sess | Out-Null
-  Write-Host "Activated '$name'." -ForegroundColor Green
+  docker restart dental-n8n | Out-Null
+  for ($i=0; $i -lt 30; $i++) { try { $r=Invoke-WebRequest "$base/healthz" -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -eq 200) { break } } catch { Start-Sleep 2 } }
+  Start-Sleep 2
+  Write-Host "Published + activated '$name' (webhooks registered after restart)." -ForegroundColor Green
 }
 
 # --- report webhook paths ---

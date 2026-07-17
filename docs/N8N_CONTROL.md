@@ -31,7 +31,15 @@ Placeholders substituted from `.env` at deploy time (keeps committed JSON portab
 - `__PG_CRED_ID__` → `N8N_PG_CRED_ID`
 
 ## Node authoring notes (validated on 2.9.4)
-- Webhook trigger: `n8n-nodes-base.webhook` typeVersion **2**, `responseMode:"lastNode"` → response is the last node's JSON. Production URL: `/webhook/<path>`.
-- Code (JS): `n8n-nodes-base.code` typeVersion **2**, `parameters.jsCode`, returns `[{json:{...}}]`. `$env.VAR` available (`N8N_BLOCK_ENV_ACCESS_IN_NODE=false`).
-- OpenAI calls: HTTP Request node with `Authorization: Bearer {{$env.OPENAI_API_KEY}}` (no credential needed).
-- Committed workflow JSON omits the instance-specific `id`; the deploy helper upserts by `name`.
+- Webhook trigger: `n8n-nodes-base.webhook` typeVersion **2**, `responseMode:"lastNode"`. Set `responseData:"allEntries"` to return every item (default returns only the first). Production URL: `/webhook/<path>`.
+- Code (JS): `n8n-nodes-base.code` typeVersion **2**, `parameters.jsCode`, returns `[{json:{...}}]`.
+- Committed workflow JSON contains only `{name, nodes, connections, settings}` (no instance `id`); the deploy helper upserts by `name` and sends the **raw JSON as UTF-8 bytes** (PS 5.1 `ConvertTo-Json`/string bodies corrupt large `jsCode`).
+- **Activation flow (2.x):** create/update via `/rest` → `n8n publish:workflow --id` → PATCH `active:true` → **restart** to register webhooks. The deploy helper's `-Activate` does all of this.
+
+## ⚠️ JS Task Runner sandbox constraints (critical for all Code nodes)
+Code nodes run in the **JS Task Runner** (out-of-process). The sandbox is restricted:
+- **No `URL` global** — `new URL()` throws `URL is not defined`. Parse/join URLs with string ops.
+- **No `$env`** — not reliably present; pass config via the request body / previous nodes instead.
+- **No `fetch`** — use `this.helpers.httpRequest({url, method, headers, json:false})` (this IS available; returns a string when `json:false`).
+- Standard JS (`Set`, `Map`, `Array`, regex, `JSON`, `parseInt`, ...) works. Prefer `.match()` over `matchAll()`+spread.
+- Wrap node bodies in `try/catch` returning `{__error}` — webhook 500s expose no error body, so self-report errors in the output during dev.
