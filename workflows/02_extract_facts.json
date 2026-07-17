@@ -1,0 +1,212 @@
+{
+  "name": "02_extract_facts",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "extract",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "b2000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        0
+      ],
+      "webhookId": "b2000000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Load cleaned pages for a clinic for extraction.\n-- Params: $1 website_url, $2 limit (nullable -> all)\nSELECT p.url, p.page_type, p.clean_text\nFROM pages_raw p\nJOIN clinic c ON c.id = p.clinic_id\nWHERE c.website_url = $1\n  AND p.status_code = 200\n  AND char_length(p.clean_text) > 40\nORDER BY p.id\nLIMIT COALESCE($2::int, 1000);\n",
+        "options": {
+          "queryReplacement": "={{ [$json.body.website_url, $json.body.limit || null] }}"
+        }
+      },
+      "id": "b2000000-0000-0000-0000-000000000002",
+      "name": "LoadPages",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        20,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build one OpenAI chat-completions request per page (Code node, all items).\n// Input : rows from pages_raw { url, page_type, clean_text }\n// Output: { url, page_type, oai_body } — oai_body sent by the next HTTP node.\nconst SYS = [\n  \"You extract structured dental/orthodontic clinic data from ONE web page's text.\",\n  \"Return ONLY a JSON object with these keys (use [] or null when absent on THIS page):\",\n  '{',\n  '  \"clinic\": { \"name\": string|null, \"phone\": string|null, \"email\": string|null, \"address\": string|null, \"booking_url\": string|null, \"about\": string|null },',\n  '  \"services\": [ { \"name\": string, \"category\": string|null, \"description\": string|null } ],',\n  '  \"doctors\": [ { \"name\": string, \"title\": string|null, \"bio\": string|null, \"specialties\": [string] } ],',\n  '  \"pricing\": [ { \"service_name\": string, \"price_min\": number|null, \"price_max\": number|null, \"currency\": string|null, \"unit\": string|null, \"notes\": string|null } ],',\n  '  \"hours\": [ { \"day_of_week\": 0-6 (0=Sunday), \"open_time\": \"HH:MM\"|null, \"close_time\": \"HH:MM\"|null, \"is_closed\": boolean } ],',\n  '  \"faqs\": [ { \"question\": string, \"answer\": string, \"category\": string|null } ],',\n  '  \"policies\": [ { \"policy_type\": string, \"title\": string|null, \"content\": string } ]',\n  '}',\n  \"RULES: Only include facts explicitly stated in the text. NEVER invent prices, hours, phone numbers, or names.\",\n  \"Use the clinic's own service names. Keep descriptions/answers concise (<= 60 words). Omit navigation/boilerplate.\",\n].join(\"\\n\");\n\nreturn $input.all().map(function (it) {\n  const p = it.json;\n  const text = String(p.clean_text || '').slice(0, 6000);\n  return {\n    json: {\n      url: p.url,\n      page_type: p.page_type,\n      oai_body: {\n        model: 'gpt-4o-mini',\n        temperature: 0,\n        response_format: { type: 'json_object' },\n        messages: [\n          { role: 'system', content: SYS },\n          { role: 'user', content: 'URL: ' + p.url + '\\nPAGE TYPE: ' + p.page_type + '\\n\\nPAGE TEXT:\\n' + text },\n        ],\n      },\n    },\n  };\n});\n"
+      },
+      "id": "b2000000-0000-0000-0000-000000000003",
+      "name": "BuildExtractReq",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 200
+            }
+          }
+        }
+      },
+      "id": "b2000000-0000-0000-0000-000000000004",
+      "name": "OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        0
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "__OPENAI_CRED_ID__",
+          "name": "OpenAI Dental"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse + aggregate extraction (Code node, all items).\n// Input : OpenAI responses (one per page), aligned by index with BuildExtractReq items.\n// Output: ONE item with deduped entity arrays as JSON strings, ready for bulk store.\nconst responses = $input.all();\nconst reqs = $('BuildExtractReq').all();\nconst website_url = $('Webhook').first().json.body.website_url;\n\nconst clinic = { name: null, phone: null, email: null, address: null, booking_url: null, about: null };\nconst services = [], doctors = [], pricing = [], hours = [], faqs = [], policies = [];\n\nfunction mergeClinic(c) { if (!c) return; for (const k in clinic) if (!clinic[k] && c[k]) clinic[k] = c[k]; }\n\nfor (let i = 0; i < responses.length; i++) {\n  let data = null;\n  try { data = JSON.parse(responses[i].json.choices[0].message.content); } catch (e) { continue; }\n  const src = reqs[i] ? reqs[i].json.url : null;\n  mergeClinic(data.clinic);\n  (data.services || []).forEach(s => { if (s && s.name) services.push({ name: String(s.name).slice(0,200), category: s.category || null, description: s.description || null, source_url: src }); });\n  (data.doctors || []).forEach(d => { if (d && d.name) doctors.push({ name: String(d.name).slice(0,200), title: d.title || null, bio: d.bio || null, specialties: Array.isArray(d.specialties) ? d.specialties : [], source_url: src }); });\n  (data.pricing || []).forEach(p => { if (p && p.service_name) pricing.push({ service_name: String(p.service_name).slice(0,200), price_min: (p.price_min ?? null), price_max: (p.price_max ?? null), currency: p.currency || 'USD', unit: p.unit || null, notes: p.notes || null, source_url: src }); });\n  (data.hours || []).forEach(h => { if (h && typeof h.day_of_week === 'number') hours.push({ day_of_week: h.day_of_week, open_time: h.open_time || null, close_time: h.close_time || null, is_closed: !!h.is_closed }); });\n  (data.faqs || []).forEach(f => { if (f && f.question && f.answer) faqs.push({ question: String(f.question).slice(0,500), answer: String(f.answer).slice(0,2000), category: f.category || null, source_url: src }); });\n  (data.policies || []).forEach(p => { if (p && p.content) policies.push({ policy_type: p.policy_type || 'general', title: p.title || null, content: String(p.content).slice(0,3000), source_url: src }); });\n}\n\nfunction dedupe(arr, key) { const seen = {}, out = []; for (const x of arr) { const k = String(x[key] || '').toLowerCase().trim(); if (k && !seen[k]) { seen[k] = 1; out.push(x); } } return out; }\nconst S = dedupe(services, 'name');\nconst D = dedupe(doctors, 'name');\nconst F = dedupe(faqs, 'question');\nconst hmap = {}; hours.forEach(h => { hmap[h.day_of_week] = h; }); const H = Object.keys(hmap).map(k => hmap[k]);\n\nreturn [{\n  json: {\n    website_url,\n    counts: { services: S.length, doctors: D.length, pricing: pricing.length, hours: H.length, faqs: F.length, policies: policies.length },\n    clinic_json: JSON.stringify(clinic),\n    services_json: JSON.stringify(S),\n    doctors_json: JSON.stringify(D),\n    pricing_json: JSON.stringify(pricing),\n    hours_json: JSON.stringify(H),\n    faqs_json: JSON.stringify(F),\n    policies_json: JSON.stringify(policies),\n  },\n}];\n"
+      },
+      "id": "b2000000-0000-0000-0000-000000000005",
+      "name": "ParseFacts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Store extracted facts into all fact tables in one statement.\n-- Params: $1 website_url, $2 clinic(json), $3 services, $4 doctors, $5 pricing,\n--         $6 hours, $7 faqs, $8 policies  (each $3..$8 is a JSON array string)\nWITH c AS (\n  INSERT INTO clinic (website_url) VALUES ($1)\n  ON CONFLICT (website_url) DO UPDATE SET website_url = EXCLUDED.website_url\n  RETURNING id\n),\ncid AS (SELECT id FROM c),\nupd_clinic AS (\n  UPDATE clinic SET\n    name        = COALESCE(NULLIF($2::jsonb->>'name',''), name),\n    phone       = COALESCE(NULLIF($2::jsonb->>'phone',''), phone),\n    email       = COALESCE(NULLIF($2::jsonb->>'email',''), email),\n    address     = COALESCE(NULLIF($2::jsonb->>'address',''), address),\n    booking_url = COALESCE(NULLIF($2::jsonb->>'booking_url',''), booking_url),\n    about       = COALESCE(NULLIF($2::jsonb->>'about',''), about)\n  WHERE id = (SELECT id FROM cid)\n),\nd_pricing  AS (DELETE FROM pricing  WHERE clinic_id = (SELECT id FROM cid)),\nd_faqs     AS (DELETE FROM faqs     WHERE clinic_id = (SELECT id FROM cid)),\nd_policies AS (DELETE FROM policies WHERE clinic_id = (SELECT id FROM cid)),\nins_services AS (\n  INSERT INTO services (clinic_id, name, category, description, source_url)\n  SELECT (SELECT id FROM cid), s.name, s.category, s.description, s.source_url\n  FROM jsonb_to_recordset($3::jsonb) AS s(name text, category text, description text, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET category = EXCLUDED.category, description = EXCLUDED.description, source_url = EXCLUDED.source_url\n),\nins_doctors AS (\n  INSERT INTO doctors (clinic_id, name, title, bio, specialties, source_url)\n  SELECT (SELECT id FROM cid), d.name, d.title, d.bio,\n         CASE WHEN d.specialties IS NULL THEN NULL\n              ELSE ARRAY(SELECT jsonb_array_elements_text(d.specialties)) END,\n         d.source_url\n  FROM jsonb_to_recordset($4::jsonb) AS d(name text, title text, bio text, specialties jsonb, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET title = EXCLUDED.title, bio = EXCLUDED.bio, specialties = EXCLUDED.specialties, source_url = EXCLUDED.source_url\n),\nins_pricing AS (\n  INSERT INTO pricing (clinic_id, service_name, price_min, price_max, currency, unit, notes, source_url)\n  SELECT (SELECT id FROM cid), p.service_name, p.price_min, p.price_max, COALESCE(p.currency,'USD'), p.unit, p.notes, p.source_url\n  FROM jsonb_to_recordset($5::jsonb) AS p(service_name text, price_min numeric, price_max numeric, currency text, unit text, notes text, source_url text)\n),\nins_hours AS (\n  INSERT INTO hours (clinic_id, day_of_week, open_time, close_time, is_closed)\n  SELECT (SELECT id FROM cid), h.day_of_week, h.open_time, h.close_time, COALESCE(h.is_closed,false)\n  FROM jsonb_to_recordset($6::jsonb) AS h(day_of_week smallint, open_time time, close_time time, is_closed boolean)\n  ON CONFLICT (clinic_id, day_of_week) DO UPDATE\n    SET open_time = EXCLUDED.open_time, close_time = EXCLUDED.close_time, is_closed = EXCLUDED.is_closed\n),\nins_faqs AS (\n  INSERT INTO faqs (clinic_id, question, answer, category, source_url)\n  SELECT (SELECT id FROM cid), f.question, f.answer, f.category, f.source_url\n  FROM jsonb_to_recordset($7::jsonb) AS f(question text, answer text, category text, source_url text)\n)\nINSERT INTO policies (clinic_id, policy_type, title, content, source_url)\nSELECT (SELECT id FROM cid), po.policy_type, po.title, po.content, po.source_url\nFROM jsonb_to_recordset($8::jsonb) AS po(policy_type text, title text, content text, source_url text)\nRETURNING (SELECT id FROM cid) AS clinic_id;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.website_url, $json.clinic_json, $json.services_json, $json.doctors_json, $json.pricing_json, $json.hours_json, $json.faqs_json, $json.policies_json] }}"
+        }
+      },
+      "id": "b2000000-0000-0000-0000-000000000006",
+      "name": "StoreFacts",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        900,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, clinic_id: ($input.first().json.clinic_id || null), extracted: c } }];"
+      },
+      "id": "b2000000-0000-0000-0000-000000000007",
+      "name": "Done",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "LoadPages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LoadPages": {
+      "main": [
+        [
+          {
+            "node": "BuildExtractReq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildExtractReq": {
+      "main": [
+        [
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "ParseFacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseFacts": {
+      "main": [
+        [
+          {
+            "node": "StoreFacts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "StoreFacts": {
+      "main": [
+        [
+          {
+            "node": "Done",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

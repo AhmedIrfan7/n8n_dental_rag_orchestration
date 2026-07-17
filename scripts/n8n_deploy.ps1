@@ -29,6 +29,7 @@ Invoke-WebRequest "$base/rest/login" -Method Post -Body (@{emailOrLdapLoginId=$e
 # Workflow files contain exactly {name, nodes, connections, settings}.
 $raw = Get-Content $File -Raw
 $raw = $raw.Replace('__PG_CRED_ID__', $envMap['N8N_PG_CRED_ID'])
+$raw = $raw.Replace('__OPENAI_CRED_ID__', $envMap['N8N_OPENAI_CRED_ID'])
 $wf  = $raw | ConvertFrom-Json
 $name = $wf.name
 $payload = $raw
