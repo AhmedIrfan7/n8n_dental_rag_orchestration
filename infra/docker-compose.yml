@@ -1,0 +1,121 @@
+# Dental RAG Voice Assistant — isolated stack.
+# Distinct container names, ports, network, and named volumes so this
+# coexists with the fahrschule / starter-kit stacks without conflict.
+# Run from repo root:  docker compose -f infra/docker-compose.yml --env-file .env up -d
+name: dental-rag
+
+networks:
+  dental_net:
+    name: dental_net
+
+volumes:
+  dental_n8n:
+  dental_qdrant:
+  dental_pg:
+  dental_redis:
+  dental_ollama:
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: dental-n8n
+    restart: unless-stopped
+    ports:
+      - "${N8N_PORT:-5679}:5678"
+    environment:
+      - N8N_HOST=${N8N_HOST:-localhost}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${WEBHOOK_URL:-http://localhost:5679/}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Asia/Karachi}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:-changeme_32_char_minimum_key_0001}
+      - N8N_SECURE_COOKIE=false
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_RUNNERS_ENABLED=true
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      # App data / creds available to workflow nodes:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL_FAST=${OPENAI_MODEL_FAST:-gpt-4o-mini}
+      - OPENAI_MODEL_SMART=${OPENAI_MODEL_SMART:-gpt-4o}
+      - QDRANT_URL=http://dental-qdrant:6333
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-clinic_kb}
+      - OLLAMA_BASE_URL=http://dental-ollama:11434
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - PGHOST=dental-postgres
+      - PGPORT=5432
+      - PGDATABASE=${POSTGRES_DB:-dental}
+      - PGUSER=${POSTGRES_USER:-dental}
+      - PGPASSWORD=${POSTGRES_PASSWORD:-dental}
+      - REDIS_HOST=dental-redis
+      - REDIS_PORT=6379
+    volumes:
+      - dental_n8n:/home/node/.n8n
+    networks: [dental_net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: dental-qdrant
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_PORT:-6343}:6333"
+      - "6344:6334"
+    volumes:
+      - dental_qdrant:/qdrant/storage
+    networks: [dental_net]
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dental-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-dental}
+      - POSTGRES_USER=${POSTGRES_USER:-dental}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-dental}
+    volumes:
+      - dental_pg:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro
+    networks: [dental_net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dental} -d ${POSTGRES_DB:-dental}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: dental-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    volumes:
+      - dental_redis:/data
+    networks: [dental_net]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dental-ollama
+    restart: unless-stopped
+    ports:
+      - "${OLLAMA_PORT:-11435}:11434"
+    volumes:
+      - dental_ollama:/root/.ollama
+    networks: [dental_net]
+    # GPU is optional; embeddings (nomic-embed-text) run fine on CPU.
+    # To enable NVIDIA GPU, uncomment and ensure Docker Desktop GPU support:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
