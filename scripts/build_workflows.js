@@ -13,6 +13,7 @@ const writeWf = (name, obj) => {
 
 // ---------------- 01_ingestion_pipeline ----------------
 const discover = read('scraping/discover.js');
+const fetchClean = read('scraping/fetch_clean.js');
 
 writeWf('01_ingestion_pipeline.json', {
   name: '01_ingestion_pipeline',
@@ -34,9 +35,18 @@ writeWf('01_ingestion_pipeline.json', {
       typeVersion: 2,
       position: [140, 0],
     },
+    {
+      parameters: { jsCode: fetchClean },
+      id: 'a1000000-0000-0000-0000-000000000003',
+      name: 'FetchClean',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: [380, 0],
+    },
   ],
   connections: {
     Webhook: { main: [[{ node: 'Discover', type: 'main', index: 0 }]] },
+    Discover: { main: [[{ node: 'FetchClean', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });
