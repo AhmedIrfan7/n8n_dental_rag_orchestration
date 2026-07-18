@@ -23,9 +23,54 @@ for (let i = 0; i < responses.length; i++) {
   (data.policies || []).forEach(p => { if (p && p.content) policies.push({ policy_type: p.policy_type || 'general', title: p.title || null, content: String(p.content).slice(0,3000), source_url: src }); });
 }
 
-function dedupe(arr, key) { const seen = {}, out = []; for (const x of arr) { const k = String(x[key] || '').toLowerCase().trim(); if (k && !seen[k]) { seen[k] = 1; out.push(x); } } return out; }
+// Exact-match dedup after normalizing punctuation (catches "Invisalign" vs
+// "Invisalign®", trailing periods, curly quotes, etc). Deliberately does NOT
+// do fuzzy/subset matching here - two service names sharing a word ("Braces"
+// vs "Clear Braces") are often genuinely different services, unlike a
+// person's name (see dedupeNames below).
+function normPunct(s) { return String(s || '').toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim(); }
+function dedupe(arr, key) {
+  const seen = {}, out = [];
+  for (const x of arr) { const k = normPunct(x[key]); if (k && !seen[k]) { seen[k] = 1; out.push(x); } }
+  return out;
+}
+
+// Name-aware dedup for people: strips "Dr."/"Dr"/"Doctor" and punctuation,
+// then merges any variant whose remaining words are a SUBSET of a longer
+// variant's words - "Dr deRoode" and "Dr. deRoode" both collapse into
+// "Dr. Elaine deRoode" (the most complete name seen), rather than being
+// stored as 2-3 separate "different" doctors. The most-complete variant's
+// name is kept as canonical; any field (title/bio/specialties) missing from
+// it is backfilled from the shorter variants that do have it.
+function normNameWords(s) {
+  return String(s || '')
+    .replace(/\b(dr\.?|doctor)\b/gi, ' ')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+}
+function dedupeNames(arr, key) {
+  const withWords = arr.map(x => ({ x, words: normNameWords(x[key]) })).filter(w => w.words.length);
+  withWords.sort((a, b) => b.words.length - a.words.length); // most complete name first
+  const canon = [];
+  for (const { x, words } of withWords) {
+    const match = canon.find(c => words.every(w => c.wordSet.has(w)));
+    if (match) {
+      for (const field in x) {
+        const v = x[field];
+        const cur = match.merged[field];
+        const isEmpty = cur == null || cur === '' || (Array.isArray(cur) && cur.length === 0);
+        if (isEmpty && v) match.merged[field] = v;
+      }
+    } else {
+      canon.push({ wordSet: new Set(words), merged: Object.assign({}, x) });
+    }
+  }
+  return canon.map(c => c.merged);
+}
 const S = dedupe(services, 'name');
-const D = dedupe(doctors, 'name');
+const D = dedupeNames(doctors, 'name');
 const F = dedupe(faqs, 'question');
 const hmap = {}; hours.forEach(h => { hmap[h.day_of_week] = h; }); const H = Object.keys(hmap).map(k => hmap[k]);
 

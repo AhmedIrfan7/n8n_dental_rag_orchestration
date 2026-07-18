@@ -10,13 +10,24 @@ const args = process.argv.slice(2);
 const baseIdx = args.indexOf('--base');
 const BASE = baseIdx !== -1 ? args[baseIdx + 1] : 'http://localhost:5679';
 
+// Every webhook now requires X-Webhook-Key (see docs/N8N_CONTROL.md) -
+// read the real secret straight from .env since this runs on the host.
+function loadWebhookKey() {
+  try {
+    const envText = fs.readFileSync(path.join(root, '.env'), 'utf8');
+    const m = envText.match(/^N8N_WEBHOOK_API_KEY=(.*)$/m);
+    return m ? m[1].trim() : '';
+  } catch (e) { return ''; }
+}
+const WEBHOOK_KEY = loadWebhookKey();
+
 function postJson(url, body, timeoutMs) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const data = JSON.stringify(body);
     const req = http.request({
       hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data), 'X-Webhook-Key': WEBHOOK_KEY },
       timeout: timeoutMs || 90000,
     }, (res) => {
       let raw = '';

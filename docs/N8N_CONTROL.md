@@ -9,6 +9,7 @@ schema/versioning natively and activates webhooks in-process (no restart).
 - **Owner account** initialized: `POST /rest/owner/setup` `{email, firstName, lastName, password}`. Local instance only — creds in `.env` (`N8N_OWNER_EMAIL`, `N8N_OWNER_PASSWORD`).
 - **Public API key** minted: `POST /rest/api-keys` `{label, expiresAt:null, scopes:[...]}` → `N8N_API_KEY` (used for read/export; writes go via `/rest`).
 - **Postgres credential** created: `POST /rest/credentials` `{name, type:"postgres", data:{host:"dental-postgres",port:5432,database,user,password,ssl:"disable"}}` → id in `N8N_PG_CRED_ID`.
+- **Webhook auth credential** created: `POST /rest/credentials` `{name:"Webhook Auth", type:"httpHeaderAuth", data:{name:"X-Webhook-Key", value:<random secret>}}` → id in `N8N_WEBHOOK_AUTH_CRED_ID`, secret in `N8N_WEBHOOK_API_KEY`. Every Webhook trigger node requires this header (`authentication:'headerAuth'` + this credential); every internal call to another workflow's webhook sends it too - dedicated HTTP Request nodes via the same credential (`authentication:'predefinedCredentialType', nodeCredentialType:'httpHeaderAuth'`), and the one Code-node case (`orchestrator/route_and_call.js`, which calls sub-agents via a manual `helpers.httpRequest` and can't use credential injection) via the `__WEBHOOK_API_KEY__` placeholder substituted at deploy time. Without this, every webhook was fully public - anyone with the URL could trigger scraping or burn OpenAI credits.
 
 ## Verified endpoints
 | Action | Call |
