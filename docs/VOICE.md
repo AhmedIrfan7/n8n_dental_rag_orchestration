@@ -30,16 +30,11 @@ After several failed attempts (raw network measured at ~23KB/s at one point; pip
 - `POST /transcribe` on that same generated audio → correctly transcribed it back to matching text
 - Full round trip through n8n (`POST /webhook/voice/ask`: audio in → transcribe → orchestrator → synthesize → audio out) → returned valid audio, mechanically working end to end
 
-**Known limitation, found via testing, not assumed:** the currently-running container uses Whisper **`tiny`** (chosen for its smaller download while network was bad). Isolated test: speaking "How much does Invisalign cost?" through Piper and transcribing it back with `tiny` produced **"how much does invisible are in cost?"** — the orchestrator then correctly (if unhelpfully) fell back, since that text doesn't match any real intent. This is an STT accuracy gap on domain-specific brand names, not a bug in the orchestrator/RAG pipeline (which has been separately and thoroughly verified via 14/14 passing text-based eval cases).
+**Domain-term accuracy, upgraded and re-verified:** the container initially ran Whisper **`tiny`** (smaller download while network was bad), which mistranscribed "How much does Invisalign cost?" as *"how much does invisible are in cost?"* — the orchestrator then correctly (if unhelpfully) fell back, since that text doesn't match any real intent. This was an STT accuracy gap, not a bug in the orchestrator/RAG pipeline (separately verified via 14/14 passing text-based eval cases). Upgraded to Whisper **`base`** (now the Dockerfile default) once network recovered:
+- Isolated re-test: transcribed as *"How much does invisaline cost?"* — imperfect (missing the "g") but phonetically much closer.
+- **Full round trip re-test: the orchestrator's LLM classifier understood it anyway** and returned the correct, grounded answer: *"The cost of invisalign can vary depending on the severity of your case and the length of treatment needed. For an exact quote, please contact the clinic directly."* No hallucination, correct intent, 8.5s round trip.
 
-**Fix in progress, blocked by environment:** `Dockerfile`'s default was bumped to `WHISPER_MODEL_SIZE=base` (better accuracy, worth the extra ~70MB). The rebuild attempt hit a **new, separate problem**: DNS resolution failed completely at the OS level (`nslookup` timed out against the configured resolver) — confirmed as a host-level network issue, not Docker- or code-specific. Once DNS/network recovers, rebuild and re-verify:
-```bash
-docker compose -f infra/docker-compose.yml build --build-arg WHISPER_MODEL_SIZE=base voice-fallback
-docker compose -f infra/docker-compose.yml up -d --force-recreate voice-fallback
-# then re-run the "How much does Invisalign cost?" test below and confirm accurate transcription
-```
-
-`voicebox` (the full/heavy backend) was not completed — its build kept failing on its own multi-GB dependency chain (torch/transformers/Qwen3-TTS/Chatterbox) under the same network conditions. `voice/fallback` is the actual working backend for this project; voicebox remains a documented upgrade path only.
+`voicebox` (the full/heavy backend) was not completed — its build kept failing on its own multi-GB dependency chain (torch/transformers/Qwen3-TTS/Chatterbox) under the network conditions encountered this session. `voice/fallback` is the actual working backend for this project; voicebox remains a documented upgrade path only.
 
 ## Verification steps (once a backend is running)
 ```bash
