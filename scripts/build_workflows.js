@@ -426,3 +426,51 @@ writeWf('10_orchestrator.json', {
   },
   settings: { executionOrder: 'v1' },
 });
+
+// ---------------- 05_voice_ask ----------------
+// Binary audio in -> transcribe -> orchestrator -> synthesize -> binary
+// audio out. VOICE_BASE_URL points at whichever voice backend is active
+// (fallback service by default; swap to voicebox's URL if/when it's up -
+// both expose POST /transcribe and POST /speak).
+const prepAsk = read('voice/prep_ask.js');
+const prepSpeak = read('voice/prep_speak.js');
+const VOICE_BASE_URL = 'http://dental-voice:8000';
+
+writeWf('05_voice_ask.json', {
+  name: '05_voice_ask',
+  nodes: [
+    { parameters: { httpMethod: 'POST', path: 'voice/ask', responseMode: 'lastNode', responseData: 'firstEntryBinary', options: {} },
+      id: 'd0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-400, 0], webhookId: 'd0000000-0000-0000-0000-000000000001' },
+    { parameters: {
+        method: 'POST', url: VOICE_BASE_URL + '/transcribe',
+        sendBody: true, contentType: 'multipart-form-data',
+        bodyParameters: { parameters: [{ parameterType: 'formBinaryData', name: 'file', inputDataFieldName: 'audio' }] },
+        options: { timeout: 30000 },
+      },
+      id: 'd0000000-0000-0000-0000-000000000002', name: 'Transcribe', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [-180, 0] },
+    { parameters: { jsCode: prepAsk },
+      id: 'd0000000-0000-0000-0000-000000000003', name: 'PrepAsk', type: 'n8n-nodes-base.code', typeVersion: 2, position: [40, 0] },
+    { parameters: {
+        method: 'POST', url: 'http://localhost:5678/webhook/ask',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json) }}',
+        options: { timeout: 90000 },
+      },
+      id: 'd0000000-0000-0000-0000-000000000004', name: 'AskOrchestrator', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [260, 0] },
+    { parameters: { jsCode: prepSpeak },
+      id: 'd0000000-0000-0000-0000-000000000005', name: 'PrepSpeak', type: 'n8n-nodes-base.code', typeVersion: 2, position: [480, 0] },
+    { parameters: {
+        method: 'POST', url: VOICE_BASE_URL + '/speak',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.speak_body) }}',
+        options: { timeout: 30000, response: { response: { responseFormat: 'file' } } },
+      },
+      id: 'd0000000-0000-0000-0000-000000000006', name: 'Speak', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [700, 0] },
+  ],
+  connections: {
+    Webhook: { main: [[{ node: 'Transcribe', type: 'main', index: 0 }]] },
+    Transcribe: { main: [[{ node: 'PrepAsk', type: 'main', index: 0 }]] },
+    PrepAsk: { main: [[{ node: 'AskOrchestrator', type: 'main', index: 0 }]] },
+    AskOrchestrator: { main: [[{ node: 'PrepSpeak', type: 'main', index: 0 }]] },
+    PrepSpeak: { main: [[{ node: 'Speak', type: 'main', index: 0 }]] },
+  },
+  settings: { executionOrder: 'v1' },
+});
