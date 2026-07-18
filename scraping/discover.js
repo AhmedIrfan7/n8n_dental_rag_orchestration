@@ -39,7 +39,7 @@ try {
 
   async function fetchText(url) {
     try {
-      const res = await helpers.httpRequest({ url, method: 'GET', headers: { 'User-Agent': ua }, json: false });
+      const res = await helpers.httpRequest({ url, method: 'GET', headers: { 'User-Agent': ua }, json: false, timeout: 12000 });
       return typeof res === 'string' ? res : String(res);
     } catch (e) { return null; }
   }

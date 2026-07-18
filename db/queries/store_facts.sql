@@ -53,8 +53,13 @@ ins_faqs AS (
   INSERT INTO faqs (clinic_id, question, answer, category, source_url)
   SELECT (SELECT id FROM cid), f.question, f.answer, f.category, f.source_url
   FROM jsonb_to_recordset($7::jsonb) AS f(question text, answer text, category text, source_url text)
+),
+ins_policies AS (
+  INSERT INTO policies (clinic_id, policy_type, title, content, source_url)
+  SELECT (SELECT id FROM cid), po.policy_type, po.title, po.content, po.source_url
+  FROM jsonb_to_recordset($8::jsonb) AS po(policy_type text, title text, content text, source_url text)
 )
-INSERT INTO policies (clinic_id, policy_type, title, content, source_url)
-SELECT (SELECT id FROM cid), po.policy_type, po.title, po.content, po.source_url
-FROM jsonb_to_recordset($8::jsonb) AS po(policy_type text, title text, content text, source_url text)
-RETURNING (SELECT id FROM cid) AS clinic_id;
+-- Final SELECT is independent of every array's cardinality (any of
+-- services/doctors/pricing/hours/faqs/policies can legitimately be empty on
+-- a given run) so this node always returns exactly one row downstream.
+SELECT id AS clinic_id FROM cid;

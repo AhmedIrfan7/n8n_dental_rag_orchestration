@@ -81,7 +81,7 @@ writeWf('01_ingestion_pipeline.json', {
         method: 'POST', url: 'http://localhost:5678/webhook/extract',
         sendBody: true, specifyBody: 'json',
         jsonBody: '={{ JSON.stringify({ website_url: $json.website_url }) }}',
-        options: { timeout: 280000 },
+        options: { timeout: 600000 },
       },
       id: 'a1000000-0000-0000-0000-000000000007',
       name: 'TriggerExtract',
@@ -120,17 +120,25 @@ writeWf('02_extract_facts.json', {
         method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
         authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
         sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
-        options: { batching: { batch: { batchSize: 5, batchInterval: 200 } } },
+        options: { timeout: 45000, batching: { batch: { batchSize: 5, batchInterval: 200 } } },
       },
       id: 'b2000000-0000-0000-0000-000000000004', name: 'OpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [460, 0],
+      retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
       credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
     { parameters: { jsCode: parseFacts },
       id: 'b2000000-0000-0000-0000-000000000005', name: 'ParseFacts', type: 'n8n-nodes-base.code', typeVersion: 2, position: [680, 0] },
     { parameters: { operation: 'executeQuery', query: storeFactsSql,
         options: { queryReplacement: '={{ [$json.website_url, $json.clinic_json, $json.services_json, $json.doctors_json, $json.pricing_json, $json.hours_json, $json.faqs_json, $json.policies_json] }}' } },
       id: 'b2000000-0000-0000-0000-000000000006', name: 'StoreFacts', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [900, 0], credentials: PG_CRED },
-    { parameters: { jsCode: "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, clinic_id: ($input.first().json.clinic_id || null), extracted: c } }];" },
-      id: 'b2000000-0000-0000-0000-000000000007', name: 'Done', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1120, 0] },
+    { parameters: {
+        method: 'POST', url: 'http://localhost:5678/webhook/index',
+        sendBody: true, specifyBody: 'json',
+        jsonBody: '={{ JSON.stringify({ website_url: $(\'ParseFacts\').first().json.website_url }) }}',
+        options: { timeout: 600000 },
+      },
+      id: 'b2000000-0000-0000-0000-000000000007', name: 'TriggerIndex', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1120, 0] },
+    { parameters: { jsCode: "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, extracted: c, indexed: $input.first().json } }];" },
+      id: 'b2000000-0000-0000-0000-000000000008', name: 'Done', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1340, 0] },
   ],
   connections: {
     Webhook: { main: [[{ node: 'LoadPages', type: 'main', index: 0 }]] },
@@ -138,7 +146,29 @@ writeWf('02_extract_facts.json', {
     BuildExtractReq: { main: [[{ node: 'OpenAI', type: 'main', index: 0 }]] },
     OpenAI: { main: [[{ node: 'ParseFacts', type: 'main', index: 0 }]] },
     ParseFacts: { main: [[{ node: 'StoreFacts', type: 'main', index: 0 }]] },
-    StoreFacts: { main: [[{ node: 'Done', type: 'main', index: 0 }]] },
+    StoreFacts: { main: [[{ node: 'TriggerIndex', type: 'main', index: 0 }]] },
+    TriggerIndex: { main: [[{ node: 'Done', type: 'main', index: 0 }]] },
+  },
+  settings: { executionOrder: 'v1' },
+});
+
+// ---------------- 03_build_index ----------------
+const loadDocsSql = read('db/queries/load_docs.sql');
+const indexDocs = read('rag/index_docs.js');
+
+writeWf('03_build_index.json', {
+  name: '03_build_index',
+  nodes: [
+    { parameters: { httpMethod: 'POST', path: 'index', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      id: 'b3000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 0], webhookId: 'b3000000-0000-0000-0000-000000000001' },
+    { parameters: { operation: 'executeQuery', query: loadDocsSql, options: { queryReplacement: '={{ [$json.body.website_url] }}' } },
+      id: 'b3000000-0000-0000-0000-000000000002', name: 'LoadDocs', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [220, 0], credentials: PG_CRED },
+    { parameters: { jsCode: indexDocs },
+      id: 'b3000000-0000-0000-0000-000000000003', name: 'IndexDocs', type: 'n8n-nodes-base.code', typeVersion: 2, position: [440, 0] },
+  ],
+  connections: {
+    Webhook: { main: [[{ node: 'LoadDocs', type: 'main', index: 0 }]] },
+    LoadDocs: { main: [[{ node: 'IndexDocs', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });

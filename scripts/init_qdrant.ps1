@@ -1,4 +1,4 @@
-# Create the Qdrant collection for the clinic knowledge base.
+﻿# Create the Qdrant collection for the clinic knowledge base.
 # nomic-embed-text -> 768 dims, cosine distance.
 $ErrorActionPreference = "Stop"
 $port = 6343
@@ -12,7 +12,7 @@ try {
   Write-Host "Create returned: $($_.Exception.Message) (may already exist)" -ForegroundColor Yellow
 }
 # payload indexes for filtered retrieval (type/page_type/service)
-foreach ($field in @("type","page_type","service_name")) {
+foreach ($field in @("type","page_type","service_name","website_url")) {
   $idx = @{ field_name = $field; field_schema = "keyword" } | ConvertTo-Json
   try { Invoke-RestMethod -Uri "http://localhost:$port/collections/$name/index" -Method Put -Body $idx -ContentType "application/json" | Out-Null } catch {}
 }

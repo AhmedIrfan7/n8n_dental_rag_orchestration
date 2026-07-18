@@ -65,6 +65,7 @@
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
         "options": {
+          "timeout": 45000,
           "batching": {
             "batch": {
               "batchSize": 5,
@@ -81,6 +82,9 @@
         460,
         0
       ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
       "credentials": {
         "openAiApi": {
           "id": "__OPENAI_CRED_ID__",
@@ -104,7 +108,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Store extracted facts into all fact tables in one statement.\n-- Params: $1 website_url, $2 clinic(json), $3 services, $4 doctors, $5 pricing,\n--         $6 hours, $7 faqs, $8 policies  (each $3..$8 is a JSON array string)\nWITH c AS (\n  INSERT INTO clinic (website_url) VALUES ($1)\n  ON CONFLICT (website_url) DO UPDATE SET website_url = EXCLUDED.website_url\n  RETURNING id\n),\ncid AS (SELECT id FROM c),\nupd_clinic AS (\n  UPDATE clinic SET\n    name        = COALESCE(NULLIF($2::jsonb->>'name',''), name),\n    phone       = COALESCE(NULLIF($2::jsonb->>'phone',''), phone),\n    email       = COALESCE(NULLIF($2::jsonb->>'email',''), email),\n    address     = COALESCE(NULLIF($2::jsonb->>'address',''), address),\n    booking_url = COALESCE(NULLIF($2::jsonb->>'booking_url',''), booking_url),\n    about       = COALESCE(NULLIF($2::jsonb->>'about',''), about)\n  WHERE id = (SELECT id FROM cid)\n),\nd_pricing  AS (DELETE FROM pricing  WHERE clinic_id = (SELECT id FROM cid)),\nd_faqs     AS (DELETE FROM faqs     WHERE clinic_id = (SELECT id FROM cid)),\nd_policies AS (DELETE FROM policies WHERE clinic_id = (SELECT id FROM cid)),\nins_services AS (\n  INSERT INTO services (clinic_id, name, category, description, source_url)\n  SELECT (SELECT id FROM cid), s.name, s.category, s.description, s.source_url\n  FROM jsonb_to_recordset($3::jsonb) AS s(name text, category text, description text, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET category = EXCLUDED.category, description = EXCLUDED.description, source_url = EXCLUDED.source_url\n),\nins_doctors AS (\n  INSERT INTO doctors (clinic_id, name, title, bio, specialties, source_url)\n  SELECT (SELECT id FROM cid), d.name, d.title, d.bio,\n         CASE WHEN d.specialties IS NULL THEN NULL\n              ELSE ARRAY(SELECT jsonb_array_elements_text(d.specialties)) END,\n         d.source_url\n  FROM jsonb_to_recordset($4::jsonb) AS d(name text, title text, bio text, specialties jsonb, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET title = EXCLUDED.title, bio = EXCLUDED.bio, specialties = EXCLUDED.specialties, source_url = EXCLUDED.source_url\n),\nins_pricing AS (\n  INSERT INTO pricing (clinic_id, service_name, price_min, price_max, currency, unit, notes, source_url)\n  SELECT (SELECT id FROM cid), p.service_name, p.price_min, p.price_max, COALESCE(p.currency,'USD'), p.unit, p.notes, p.source_url\n  FROM jsonb_to_recordset($5::jsonb) AS p(service_name text, price_min numeric, price_max numeric, currency text, unit text, notes text, source_url text)\n),\nins_hours AS (\n  INSERT INTO hours (clinic_id, day_of_week, open_time, close_time, is_closed)\n  SELECT (SELECT id FROM cid), h.day_of_week, h.open_time, h.close_time, COALESCE(h.is_closed,false)\n  FROM jsonb_to_recordset($6::jsonb) AS h(day_of_week smallint, open_time time, close_time time, is_closed boolean)\n  ON CONFLICT (clinic_id, day_of_week) DO UPDATE\n    SET open_time = EXCLUDED.open_time, close_time = EXCLUDED.close_time, is_closed = EXCLUDED.is_closed\n),\nins_faqs AS (\n  INSERT INTO faqs (clinic_id, question, answer, category, source_url)\n  SELECT (SELECT id FROM cid), f.question, f.answer, f.category, f.source_url\n  FROM jsonb_to_recordset($7::jsonb) AS f(question text, answer text, category text, source_url text)\n)\nINSERT INTO policies (clinic_id, policy_type, title, content, source_url)\nSELECT (SELECT id FROM cid), po.policy_type, po.title, po.content, po.source_url\nFROM jsonb_to_recordset($8::jsonb) AS po(policy_type text, title text, content text, source_url text)\nRETURNING (SELECT id FROM cid) AS clinic_id;\n",
+        "query": "-- Store extracted facts into all fact tables in one statement.\n-- Params: $1 website_url, $2 clinic(json), $3 services, $4 doctors, $5 pricing,\n--         $6 hours, $7 faqs, $8 policies  (each $3..$8 is a JSON array string)\nWITH c AS (\n  INSERT INTO clinic (website_url) VALUES ($1)\n  ON CONFLICT (website_url) DO UPDATE SET website_url = EXCLUDED.website_url\n  RETURNING id\n),\ncid AS (SELECT id FROM c),\nupd_clinic AS (\n  UPDATE clinic SET\n    name        = COALESCE(NULLIF($2::jsonb->>'name',''), name),\n    phone       = COALESCE(NULLIF($2::jsonb->>'phone',''), phone),\n    email       = COALESCE(NULLIF($2::jsonb->>'email',''), email),\n    address     = COALESCE(NULLIF($2::jsonb->>'address',''), address),\n    booking_url = COALESCE(NULLIF($2::jsonb->>'booking_url',''), booking_url),\n    about       = COALESCE(NULLIF($2::jsonb->>'about',''), about)\n  WHERE id = (SELECT id FROM cid)\n),\nd_pricing  AS (DELETE FROM pricing  WHERE clinic_id = (SELECT id FROM cid)),\nd_faqs     AS (DELETE FROM faqs     WHERE clinic_id = (SELECT id FROM cid)),\nd_policies AS (DELETE FROM policies WHERE clinic_id = (SELECT id FROM cid)),\nins_services AS (\n  INSERT INTO services (clinic_id, name, category, description, source_url)\n  SELECT (SELECT id FROM cid), s.name, s.category, s.description, s.source_url\n  FROM jsonb_to_recordset($3::jsonb) AS s(name text, category text, description text, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET category = EXCLUDED.category, description = EXCLUDED.description, source_url = EXCLUDED.source_url\n),\nins_doctors AS (\n  INSERT INTO doctors (clinic_id, name, title, bio, specialties, source_url)\n  SELECT (SELECT id FROM cid), d.name, d.title, d.bio,\n         CASE WHEN d.specialties IS NULL THEN NULL\n              ELSE ARRAY(SELECT jsonb_array_elements_text(d.specialties)) END,\n         d.source_url\n  FROM jsonb_to_recordset($4::jsonb) AS d(name text, title text, bio text, specialties jsonb, source_url text)\n  ON CONFLICT (clinic_id, name) DO UPDATE\n    SET title = EXCLUDED.title, bio = EXCLUDED.bio, specialties = EXCLUDED.specialties, source_url = EXCLUDED.source_url\n),\nins_pricing AS (\n  INSERT INTO pricing (clinic_id, service_name, price_min, price_max, currency, unit, notes, source_url)\n  SELECT (SELECT id FROM cid), p.service_name, p.price_min, p.price_max, COALESCE(p.currency,'USD'), p.unit, p.notes, p.source_url\n  FROM jsonb_to_recordset($5::jsonb) AS p(service_name text, price_min numeric, price_max numeric, currency text, unit text, notes text, source_url text)\n),\nins_hours AS (\n  INSERT INTO hours (clinic_id, day_of_week, open_time, close_time, is_closed)\n  SELECT (SELECT id FROM cid), h.day_of_week, h.open_time, h.close_time, COALESCE(h.is_closed,false)\n  FROM jsonb_to_recordset($6::jsonb) AS h(day_of_week smallint, open_time time, close_time time, is_closed boolean)\n  ON CONFLICT (clinic_id, day_of_week) DO UPDATE\n    SET open_time = EXCLUDED.open_time, close_time = EXCLUDED.close_time, is_closed = EXCLUDED.is_closed\n),\nins_faqs AS (\n  INSERT INTO faqs (clinic_id, question, answer, category, source_url)\n  SELECT (SELECT id FROM cid), f.question, f.answer, f.category, f.source_url\n  FROM jsonb_to_recordset($7::jsonb) AS f(question text, answer text, category text, source_url text)\n),\nins_policies AS (\n  INSERT INTO policies (clinic_id, policy_type, title, content, source_url)\n  SELECT (SELECT id FROM cid), po.policy_type, po.title, po.content, po.source_url\n  FROM jsonb_to_recordset($8::jsonb) AS po(policy_type text, title text, content text, source_url text)\n)\n-- Final SELECT is independent of every array's cardinality (any of\n-- services/doctors/pricing/hours/faqs/policies can legitimately be empty on\n-- a given run) so this node always returns exactly one row downstream.\nSELECT id AS clinic_id FROM cid;\n",
         "options": {
           "queryReplacement": "={{ [$json.website_url, $json.clinic_json, $json.services_json, $json.doctors_json, $json.pricing_json, $json.hours_json, $json.faqs_json, $json.policies_json] }}"
         }
@@ -126,14 +130,34 @@
     },
     {
       "parameters": {
-        "jsCode": "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, clinic_id: ($input.first().json.clinic_id || null), extracted: c } }];"
+        "method": "POST",
+        "url": "http://localhost:5678/webhook/index",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ website_url: $('ParseFacts').first().json.website_url }) }}",
+        "options": {
+          "timeout": 600000
+        }
       },
       "id": "b2000000-0000-0000-0000-000000000007",
+      "name": "TriggerIndex",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, extracted: c, indexed: $input.first().json } }];"
+      },
+      "id": "b2000000-0000-0000-0000-000000000008",
       "name": "Done",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1120,
+        1340,
         0
       ]
     }
@@ -195,6 +219,17 @@
       ]
     },
     "StoreFacts": {
+      "main": [
+        [
+          {
+            "node": "TriggerIndex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TriggerIndex": {
       "main": [
         [
           {

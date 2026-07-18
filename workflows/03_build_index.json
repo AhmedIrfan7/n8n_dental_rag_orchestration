@@ -1,0 +1,86 @@
+{
+  "name": "03_build_index",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "index",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "b3000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b3000000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Load all indexable documents for a clinic: page text + structured facts.\n-- Param: $1 website_url\nWITH cid AS (SELECT id FROM clinic WHERE website_url = $1)\nSELECT 'page:' || url_hash AS ext_id, 'page' AS dtype, page_type AS section, url,\n       clean_text AS text\n  FROM pages_raw\n  WHERE clinic_id = (SELECT id FROM cid) AND status_code = 200 AND char_length(clean_text) > 60\nUNION ALL\nSELECT 'faq:' || id::text, 'faq', 'faq', source_url,\n       'Q: ' || question || E'\\nA: ' || answer\n  FROM faqs WHERE clinic_id = (SELECT id FROM cid)\nUNION ALL\nSELECT 'service:' || id::text, 'service', 'service', source_url,\n       'Service: ' || name || COALESCE(' (' || category || ')', '') || COALESCE('. ' || description, '')\n  FROM services WHERE clinic_id = (SELECT id FROM cid)\nUNION ALL\nSELECT 'pricing:' || id::text, 'pricing', 'pricing', source_url,\n       'Pricing for ' || service_name || ': ' || COALESCE(notes, '')\n       || COALESCE(' (from ' || price_min::text, '') || COALESCE(' to ' || price_max::text || ')', '')\n       || ' ' || COALESCE(currency, '')\n  FROM pricing WHERE clinic_id = (SELECT id FROM cid)\nUNION ALL\nSELECT 'doctor:' || id::text, 'doctor', 'doctor', source_url,\n       'Doctor: ' || name || COALESCE(', ' || title, '') || COALESCE('. ' || bio, '')\n  FROM doctors WHERE clinic_id = (SELECT id FROM cid)\nUNION ALL\nSELECT 'policy:' || id::text, 'policy', 'policy', source_url,\n       'Policy (' || COALESCE(policy_type, '') || '): ' || COALESCE(title || '. ', '') || content\n  FROM policies WHERE clinic_id = (SELECT id FROM cid);\n",
+        "options": {
+          "queryReplacement": "={{ [$json.body.website_url] }}"
+        }
+      },
+      "id": "b3000000-0000-0000-0000-000000000002",
+      "name": "LoadDocs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// RAG indexing — n8n Code node (Run Once for All Items).\n// Input : documents { ext_id, dtype, section, url, text } from LoadDocs.\n// Action: chunk pages, embed every chunk via Ollama, upsert to Qdrant (clear prior\n//         points for this website first). Ollama + Qdrant need no auth and are on\n//         the docker network, so this.helpers.httpRequest reaches both.\nconst helpers = this.helpers;\nconst OLLAMA = 'http://dental-ollama:11434';\nconst QDRANT = 'http://dental-qdrant:6333';\nconst COLL = 'clinic_kb';\nconst MODEL = 'nomic-embed-text';\nconst website_url = $('Webhook').first().json.body.website_url;\n\nfunction uuid() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {\n    const r = Math.random() * 16 | 0; const v = c === 'x' ? r : (r & 0x3 | 0x8); return v.toString(16);\n  });\n}\nfunction chunkText(t, size) {\n  size = size || 800;\n  const paras = String(t).split(/\\n{2,}|\\n/).map(function (s) { return s.trim(); }).filter(Boolean);\n  const out = []; let cur = '';\n  for (const p of paras) {\n    if ((cur + ' ' + p).length > size) {\n      if (cur) out.push(cur.trim());\n      if (p.length > size) { for (let i = 0; i < p.length; i += size) out.push(p.slice(i, i + size)); cur = ''; }\n      else cur = p;\n    } else cur = cur ? cur + ' ' + p : p;\n  }\n  if (cur.trim()) out.push(cur.trim());\n  return out;\n}\nasync function embed(text) {\n  const r = await helpers.httpRequest({ method: 'POST', url: OLLAMA + '/api/embeddings', body: { model: MODEL, prompt: text }, json: true, timeout: 30000 });\n  return r.embedding;\n}\n\nconst docs = $input.all().map(function (i) { return i.json; });\nconst points = [];\nfor (const d of docs) {\n  const chunks = d.dtype === 'page' ? chunkText(d.text) : [d.text];\n  for (let ci = 0; ci < chunks.length; ci++) {\n    const text = String(chunks[ci] || '').trim();\n    if (text.length < 20) continue;\n    const vector = await embed(text);\n    points.push({\n      id: uuid(),\n      vector,\n      payload: { website_url, ext_id: d.ext_id, type: d.dtype, section: d.section, url: d.url, chunk_index: ci, text },\n    });\n  }\n}\n\n// Clear prior points for this clinic (idempotent re-index)\nawait helpers.httpRequest({\n  method: 'POST', url: QDRANT + '/collections/' + COLL + '/points/delete',\n  body: { filter: { must: [{ key: 'website_url', match: { value: website_url } }] } }, json: true, timeout: 30000,\n});\n// Upsert in batches\nfor (let i = 0; i < points.length; i += 100) {\n  await helpers.httpRequest({\n    method: 'PUT', url: QDRANT + '/collections/' + COLL + '/points?wait=true',\n    body: { points: points.slice(i, i + 100) }, json: true, timeout: 30000,\n  });\n}\nreturn [{ json: { website_url, docs: docs.length, chunks_indexed: points.length } }];\n"
+      },
+      "id": "b3000000-0000-0000-0000-000000000003",
+      "name": "IndexDocs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "LoadDocs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LoadDocs": {
+      "main": [
+        [
+          {
+            "node": "IndexDocs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

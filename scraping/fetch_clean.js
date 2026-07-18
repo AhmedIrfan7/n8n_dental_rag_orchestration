@@ -47,20 +47,23 @@ function classify(url) {
   return 'general';
 }
 
-const out = [];
-for (const it of items) {
+// One slow/hanging page must not stall the whole run: rely on the request
+// library's own `timeout` option (the sandbox has no global setTimeout, so a
+// manual Promise.race timer throws synchronously and fails every request).
+// Bounded concurrency keeps 46 pages well inside the task-runner ceiling.
+async function fetchOne(it) {
   const website_url = it.json.website_url;
   const url = it.json.url;
-  if (!url) continue;
+  if (!url) return null;
   let html = null, status = 0;
   try {
-    const res = await helpers.httpRequest({ url, method: 'GET', headers: { 'User-Agent': ua }, json: false });
+    const res = await helpers.httpRequest({ url, method: 'GET', headers: { 'User-Agent': ua }, json: false, timeout: 25000 });
     html = typeof res === 'string' ? res : String(res);
     status = 200;
   } catch (e) { status = 0; }
   const title = extractTitle(html || '');
   const clean_text = cleanHtml(html || '');
-  out.push({
+  return {
     json: {
       website_url, url, status_code: status,
       page_type: classify(url), title,
@@ -68,6 +71,14 @@ for (const it of items) {
       url_hash: djb2(url),
       clean_text,
     },
-  });
+  };
+}
+
+const CONCURRENCY = 3;
+const out = [];
+for (let i = 0; i < items.length; i += CONCURRENCY) {
+  const batch = items.slice(i, i + CONCURRENCY);
+  const results = await Promise.all(batch.map(fetchOne));
+  for (const r of results) if (r) out.push(r);
 }
 return out;
