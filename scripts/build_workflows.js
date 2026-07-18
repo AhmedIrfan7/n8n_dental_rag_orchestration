@@ -189,3 +189,131 @@ writeWf('04_retriever.json', {
   },
   settings: { executionOrder: 'v1' },
 });
+
+// ---------------- sub-agent factory (Pricing / Services-FAQ / General) ----------------
+// Shared shape: Webhook -> Retrieve(typeFilter) -> BuildAnswerReq -> IF(grounded)
+//   true  -> OpenAI -> ParseAnswer
+//   false -> Fallback
+// responseMode 'lastNode' returns whichever branch actually executed.
+const buildAnswerReqTpl = read('rag/build_answer_req.js');
+const parseAnswerJs = "const d = $input.first().json; let a = ''; try { a = d.choices[0].message.content.trim(); } catch (e) { a = ''; } return [{ json: { query: $('BuildAnswerReq').first().json.query, grounded: true, answer: a, needs_fallback: !a } }];";
+const fallbackJs = "const d = $input.first().json; return [{ json: { query: d.query, grounded: false, answer: \"I don't have enough information from the clinic's site to answer that confidently. Please contact the clinic directly for details.\", needs_fallback: true } }];";
+
+function buildSubAgentWorkflow(opts) {
+  // opts: { fileName, workflowName, webhookPath, agentRole, agentRules, typeFilter }
+  const buildAnswerReq = buildAnswerReqTpl
+    .replace('__AGENT_ROLE__', opts.agentRole)
+    .replace('__AGENT_RULES__', opts.agentRules);
+  const retrieveWithFilter = retrieveJs.replace(
+    "if (body.type) must.push({ key: 'type', match: { value: body.type } });",
+    "if (body.type) must.push({ key: 'type', match: { value: body.type } });\n" +
+    (opts.typeFilter ? "if (!body.type) must.push({ key: 'type', match: { any: " + JSON.stringify(opts.typeFilter) + " } });" : '')
+  );
+
+  writeWf(opts.fileName, {
+    name: opts.workflowName,
+    nodes: [
+      { parameters: { httpMethod: 'POST', path: opts.webhookPath, responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+        id: opts.idPrefix + '01', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-200, 0], webhookId: opts.idPrefix + '01' },
+      { parameters: { jsCode: retrieveWithFilter },
+        id: opts.idPrefix + '02', name: 'Retrieve', type: 'n8n-nodes-base.code', typeVersion: 2, position: [0, 0] },
+      { parameters: { jsCode: buildAnswerReq },
+        id: opts.idPrefix + '03', name: 'BuildAnswerReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [220, 0] },
+      { parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+          conditions: [{ id: 'c1', leftValue: '={{ $json.grounded }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }], combinator: 'and' } },
+        id: opts.idPrefix + '04', name: 'IsGrounded', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [440, 0] },
+      { parameters: {
+          method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
+          authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
+          sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
+          options: { timeout: 45000 },
+        },
+        id: opts.idPrefix + '05', name: 'OpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [660, -80],
+        retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
+        credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
+      { parameters: { jsCode: parseAnswerJs },
+        id: opts.idPrefix + '06', name: 'ParseAnswer', type: 'n8n-nodes-base.code', typeVersion: 2, position: [880, -80] },
+      { parameters: { jsCode: fallbackJs },
+        id: opts.idPrefix + '07', name: 'Fallback', type: 'n8n-nodes-base.code', typeVersion: 2, position: [660, 80] },
+    ],
+    connections: {
+      Webhook: { main: [[{ node: 'Retrieve', type: 'main', index: 0 }]] },
+      Retrieve: { main: [[{ node: 'BuildAnswerReq', type: 'main', index: 0 }]] },
+      BuildAnswerReq: { main: [[{ node: 'IsGrounded', type: 'main', index: 0 }]] },
+      IsGrounded: { main: [[{ node: 'OpenAI', type: 'main', index: 0 }], [{ node: 'Fallback', type: 'main', index: 0 }]] },
+      OpenAI: { main: [[{ node: 'ParseAnswer', type: 'main', index: 0 }]] },
+    },
+    settings: { executionOrder: 'v1' },
+  });
+}
+
+// ---------------- 12_pricing_agent ----------------
+buildSubAgentWorkflow({
+  fileName: '12_pricing_agent.json', workflowName: '12_pricing_agent', webhookPath: 'agent/pricing',
+  idPrefix: 'c1200000-0000-0000-0000-0000000000',
+  agentRole: 'Pricing Agent',
+  agentRules: 'Quote only prices/ranges/notes explicitly present in the context. If no price is listed for a service, say pricing varies and the clinic can provide an exact quote.',
+  typeFilter: ['pricing', 'service'],
+});
+
+// ---------------- 13_services_faq_agent ----------------
+buildSubAgentWorkflow({
+  fileName: '13_services_faq_agent.json', workflowName: '13_services_faq_agent', webhookPath: 'agent/services-faq',
+  idPrefix: 'c1300000-0000-0000-0000-0000000000',
+  agentRole: 'Services & FAQ Agent',
+  agentRules: 'Answer questions about treatments, services offered, and general orthodontic FAQs using only the clinic’s own service names and FAQ answers in the context.',
+  typeFilter: ['service', 'faq', 'page'],
+});
+
+// ---------------- 14_general_knowledge_agent ----------------
+buildSubAgentWorkflow({
+  fileName: '14_general_knowledge_agent.json', workflowName: '14_general_knowledge_agent', webhookPath: 'agent/general',
+  idPrefix: 'c1400000-0000-0000-0000-0000000000',
+  agentRole: 'General Knowledge Agent',
+  agentRules: 'Answer questions about the clinic itself: doctors, location, contact info, policies, and about-us content, using only the context provided.',
+  typeFilter: ['doctor', 'policy', 'page'],
+});
+
+// ---------------- 11_booking_agent ----------------
+const lookupClinicSql = read('db/queries/lookup_clinic.sql');
+const insertBookingSql = read('db/queries/insert_booking.sql');
+const buildBookingReq = read('booking/build_extract_req.js');
+const parseSlots = read('booking/parse_slots.js');
+const formatBookingReply = read('booking/format_reply.js');
+
+writeWf('11_booking_agent.json', {
+  name: '11_booking_agent',
+  nodes: [
+    { parameters: { httpMethod: 'POST', path: 'agent/booking', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      id: 'c1100000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-400, 0], webhookId: 'c1100000-0000-0000-0000-000000000001' },
+    { parameters: { operation: 'executeQuery', query: lookupClinicSql, options: { queryReplacement: '={{ [$json.body.website_url] }}' } },
+      id: 'c1100000-0000-0000-0000-000000000002', name: 'LookupClinic', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-180, 0], credentials: PG_CRED },
+    { parameters: { jsCode: buildBookingReq },
+      id: 'c1100000-0000-0000-0000-000000000003', name: 'BuildBookingReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [40, 0] },
+    { parameters: {
+        method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
+        authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
+        options: { timeout: 45000 },
+      },
+      id: 'c1100000-0000-0000-0000-000000000004', name: 'OpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [260, 0],
+      retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
+      credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
+    { parameters: { jsCode: parseSlots },
+      id: 'c1100000-0000-0000-0000-000000000005', name: 'ParseSlots', type: 'n8n-nodes-base.code', typeVersion: 2, position: [480, 0] },
+    { parameters: { operation: 'executeQuery', query: insertBookingSql,
+        options: { queryReplacement: '={{ [$json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}' } },
+      id: 'c1100000-0000-0000-0000-000000000006', name: 'InsertBooking', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [700, 0], credentials: PG_CRED },
+    { parameters: { jsCode: formatBookingReply },
+      id: 'c1100000-0000-0000-0000-000000000007', name: 'FormatReply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [920, 0] },
+  ],
+  connections: {
+    Webhook: { main: [[{ node: 'LookupClinic', type: 'main', index: 0 }]] },
+    LookupClinic: { main: [[{ node: 'BuildBookingReq', type: 'main', index: 0 }]] },
+    BuildBookingReq: { main: [[{ node: 'OpenAI', type: 'main', index: 0 }]] },
+    OpenAI: { main: [[{ node: 'ParseSlots', type: 'main', index: 0 }]] },
+    ParseSlots: { main: [[{ node: 'InsertBooking', type: 'main', index: 0 }]] },
+    InsertBooking: { main: [[{ node: 'FormatReply', type: 'main', index: 0 }]] },
+  },
+  settings: { executionOrder: 'v1' },
+});

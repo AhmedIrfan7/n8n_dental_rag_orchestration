@@ -1,0 +1,210 @@
+{
+  "name": "11_booking_agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent/booking",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "c1100000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        0
+      ],
+      "webhookId": "c1100000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Param: $1 website_url\nSELECT id, name, phone, email, booking_url\nFROM clinic\nWHERE website_url = $1;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.body.website_url] }}"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-000000000002",
+      "name": "LookupClinic",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -180,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Booking slot extraction — build the OpenAI request (Code node).\n// Input : webhook body { query, website_url } (read via named reference since\n//         LookupClinic sits between Webhook and this node, so $input here is\n//         the Postgres row, not the webhook payload).\n// Output: { query, website_url, oai_body }\nconst webhookJson = $('Webhook').first().json;\nconst body = webhookJson.body || webhookJson || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\nconst today = new Date().toISOString().slice(0, 10);\n\nconst sys = [\n  \"Extract a dental/orthodontic appointment request from the patient's message.\",\n  'Today\\'s date is ' + today + ' (YYYY-MM-DD). Resolve relative dates (\"next Monday\", \"tomorrow\") against it; use null if you cannot resolve a date confidently.',\n  'Return ONLY JSON: { \"service_name\": string|null, \"preferred_date\": \"YYYY-MM-DD\"|null, \"preferred_time\": \"HH:MM\"|null (24h), \"patient_name\": string|null, \"patient_contact\": string|null }',\n  'Do not invent values not implied by the message. Leave a field null if absent.',\n].join('\\n');\n\nreturn [{\n  json: {\n    query, website_url: body.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: query },\n      ],\n    },\n  },\n}];\n"
+      },
+      "id": "c1100000-0000-0000-0000-000000000003",
+      "name": "BuildBookingReq",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "c1100000-0000-0000-0000-000000000004",
+      "name": "OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        260,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "__OPENAI_CRED_ID__",
+          "name": "OpenAI Dental"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse extracted booking slots, decide status, prep DB params (Code node).\n// Input : OpenAI response (from BuildBookingReq's oai_body).\nconst query = $('BuildBookingReq').first().json.query;\nconst clinicRows = $('LookupClinic').all().map(function (i) { return i.json; });\nconst clinic = clinicRows.length ? clinicRows[0] : null;\n\nlet slots = {};\ntry { slots = JSON.parse($input.first().json.choices[0].message.content); } catch (e) { slots = {}; }\n\nconst service_name = slots.service_name || null;\nconst preferred_date = slots.preferred_date || null;\nconst preferred_time = slots.preferred_time || null;\nconst patient_name = slots.patient_name || null;\nconst patient_contact = slots.patient_contact || null;\n\nconst missing = [];\nif (!service_name) missing.push('service');\nif (!preferred_date && !preferred_time) missing.push('preferred date or time');\nif (!patient_name) missing.push('your name');\n\nconst status = missing.length === 0 ? 'confirming' : 'collecting';\n\nreturn [{\n  json: {\n    query,\n    clinic_id: clinic ? clinic.id : null,\n    clinic_name: clinic ? clinic.name : null,\n    clinic_phone: clinic ? clinic.phone : null,\n    clinic_booking_url: clinic ? clinic.booking_url : null,\n    service_name, preferred_date, preferred_time, patient_name, patient_contact,\n    status, missing,\n  },\n}];\n"
+      },
+      "id": "c1100000-0000-0000-0000-000000000005",
+      "name": "ParseSlots",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Params: $1 clinic_id, $2 service_name, $3 preferred_date, $4 preferred_time,\n--         $5 patient_name, $6 patient_contact, $7 status, $8 notes\nINSERT INTO booking_requests\n  (clinic_id, service_name, preferred_date, preferred_time, patient_name, patient_contact, status, notes)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8)\nRETURNING id, status;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-000000000006",
+      "name": "InsertBooking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        700,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format the final booking reply (Code node), after InsertBooking wrote the row.\nconst s = $('ParseSlots').first().json;\nconst inserted = $input.first().json; // { id, status } from InsertBooking\n\nconst contactBits = [];\nif (s.clinic_phone) contactBits.push('call ' + s.clinic_phone);\nif (s.clinic_booking_url) contactBits.push('book online at ' + s.clinic_booking_url);\nconst contactLine = contactBits.length ? ' You can also ' + contactBits.join(' or ') + '.' : '';\n\nlet answer;\nif (s.status === 'confirming') {\n  const when = [s.preferred_date, s.preferred_time].filter(Boolean).join(' at ');\n  answer = 'Got it' + (s.patient_name ? ', ' + s.patient_name : '') + '! I\\'ve noted your request for ' +\n    (s.service_name || 'an appointment') + (when ? ' on ' + when : '') +\n    '. The clinic will confirm your appointment shortly.' + contactLine;\n} else {\n  const asks = [];\n  if (s.missing.indexOf('service') !== -1) asks.push('which service or treatment you need');\n  if (s.missing.indexOf('preferred date or time') !== -1) asks.push('a preferred date or time');\n  if (s.missing.indexOf('your name') !== -1) asks.push('your name');\n  answer = 'I can help book that. Could you tell me ' + asks.join(' and ') + '?' + contactLine;\n}\n\nreturn [{\n  json: {\n    query: s.query,\n    booking_id: inserted.id,\n    status: inserted.status,\n    answer,\n  },\n}];\n"
+      },
+      "id": "c1100000-0000-0000-0000-000000000007",
+      "name": "FormatReply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "LookupClinic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LookupClinic": {
+      "main": [
+        [
+          {
+            "node": "BuildBookingReq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildBookingReq": {
+      "main": [
+        [
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "ParseSlots",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ParseSlots": {
+      "main": [
+        [
+          {
+            "node": "InsertBooking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InsertBooking": {
+      "main": [
+        [
+          {
+            "node": "FormatReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

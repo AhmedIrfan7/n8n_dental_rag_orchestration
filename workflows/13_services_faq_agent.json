@@ -1,0 +1,205 @@
+{
+  "name": "13_services_faq_agent",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agent/services-faq",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "c1300000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        0
+      ],
+      "webhookId": "c1300000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Retrieval — n8n Code node (Run Once for All Items).\n// Input : webhook body { query, website_url, type?, top_k?, min_score? }\n// Output: ONE item { query, grounded, top_score, matches:[{score,type,section,url,text}] }\n// Grounding guard: if the best match scores below min_score, flag grounded=false\n// so callers (sub-agents/synthesizer) know to fall back rather than invent an answer.\nconst helpers = this.helpers;\nconst OLLAMA = 'http://dental-ollama:11434';\nconst QDRANT = 'http://dental-qdrant:6333';\nconst COLL = 'clinic_kb';\nconst MODEL = 'nomic-embed-text';\n\nconst body = $input.first().json.body || $input.first().json || {};\nconst query = String(body.query || '').trim();\nconst website_url = body.website_url || null;\nconst topK = parseInt(body.top_k || 6, 10);\nconst minScore = typeof body.min_score === 'number' ? body.min_score : 0.55;\nif (!query) throw new Error('query is required');\n\nconst e = await helpers.httpRequest({\n  method: 'POST', url: OLLAMA + '/api/embeddings',\n  body: { model: MODEL, prompt: query }, json: true, timeout: 30000,\n});\nconst vector = e.embedding;\n\nconst must = [];\nif (website_url) must.push({ key: 'website_url', match: { value: website_url } });\nif (body.type) must.push({ key: 'type', match: { value: body.type } });\nif (!body.type) must.push({ key: 'type', match: { any: [\"service\",\"faq\",\"page\"] } });\n\nconst searchBody = { vector, limit: topK, with_payload: true };\nif (must.length) searchBody.filter = { must };\n\nconst r = await helpers.httpRequest({\n  method: 'POST', url: QDRANT + '/collections/' + COLL + '/points/search',\n  body: searchBody, json: true, timeout: 30000,\n});\n\nconst seen = new Set();\nconst matches = [];\nfor (const hit of (r.result || [])) {\n  const key = (hit.payload.ext_id || '') + ':' + (hit.payload.chunk_index || 0);\n  if (seen.has(key)) continue;\n  seen.add(key);\n  matches.push({\n    score: hit.score,\n    type: hit.payload.type,\n    section: hit.payload.section,\n    url: hit.payload.url,\n    text: hit.payload.text,\n  });\n}\n\nconst top_score = matches.length ? matches[0].score : 0;\nreturn [{\n  json: {\n    query,\n    grounded: top_score >= minScore,\n    top_score,\n    matches,\n  },\n}];\n"
+      },
+      "id": "c1300000-0000-0000-0000-000000000002",
+      "name": "Retrieve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build a grounded-answer LLM request from retriever output (Code node).\n// Input : { query, grounded, top_score, matches[] } from Retrieve, plus\n//         a static `agentRole`/`instructions` baked in per sub-agent workflow.\n// Output: { query, grounded, oai_body } for the following OpenAI node.\n// AGENT_ROLE and AGENT_RULES are injected by string-substitution at build time\n// (see scripts/build_workflows.js) so this one file serves every sub-agent.\nconst AGENT_ROLE = 'Services & FAQ Agent';\nconst AGENT_RULES = 'Answer questions about treatments, services offered, and general orthodontic FAQs using only the clinic’s own service names and FAQ answers in the context.';\n\nconst d = $input.first().json;\nconst query = d.query;\nconst grounded = !!d.grounded;\nconst matches = d.matches || [];\n\nif (!grounded || matches.length === 0) {\n  return [{\n    json: {\n      query, grounded: false,\n      answer: null,\n      needs_fallback: true,\n    },\n  }];\n}\n\nconst context = matches.map(function (m, i) {\n  return '[' + (i + 1) + '] (' + m.type + ') ' + m.text;\n}).join('\\n\\n');\n\nconst sys = [\n  'You are the ' + AGENT_ROLE + ' for a dental/orthodontic clinic chatbot.',\n  AGENT_RULES,\n  'CRITICAL: Only use facts present in the CONTEXT below. Never invent prices, names, hours, or policies.',\n  'If the context does not fully answer the question, say what you do know and suggest contacting the clinic for specifics.',\n  'Cite nothing explicitly (no [1] markers in the reply) - just write a natural, professional, concise answer (<= 80 words).',\n].join('\\n');\n\nconst user = 'QUESTION: ' + query + '\\n\\nCONTEXT:\\n' + context;\n\nreturn [{\n  json: {\n    query, grounded: true, needs_fallback: false,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0.2,\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: user },\n      ],\n    },\n  },\n}];\n"
+      },
+      "id": "c1300000-0000-0000-0000-000000000003",
+      "name": "BuildAnswerReq",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.grounded }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c1300000-0000-0000-0000-000000000004",
+      "name": "IsGrounded",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "c1300000-0000-0000-0000-000000000005",
+      "name": "OpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        -80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "__OPENAI_CRED_ID__",
+          "name": "OpenAI Dental"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json; let a = ''; try { a = d.choices[0].message.content.trim(); } catch (e) { a = ''; } return [{ json: { query: $('BuildAnswerReq').first().json.query, grounded: true, answer: a, needs_fallback: !a } }];"
+      },
+      "id": "c1300000-0000-0000-0000-000000000006",
+      "name": "ParseAnswer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = $input.first().json; return [{ json: { query: d.query, grounded: false, answer: \"I don't have enough information from the clinic's site to answer that confidently. Please contact the clinic directly for details.\", needs_fallback: true } }];"
+      },
+      "id": "c1300000-0000-0000-0000-000000000007",
+      "name": "Fallback",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Retrieve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve": {
+      "main": [
+        [
+          {
+            "node": "BuildAnswerReq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildAnswerReq": {
+      "main": [
+        [
+          {
+            "node": "IsGrounded",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsGrounded": {
+      "main": [
+        [
+          {
+            "node": "OpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI": {
+      "main": [
+        [
+          {
+            "node": "ParseAnswer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
