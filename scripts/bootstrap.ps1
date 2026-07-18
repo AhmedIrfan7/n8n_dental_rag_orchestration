@@ -37,15 +37,20 @@ Write-Host "`n=== 5/5: health check ===" -ForegroundColor Cyan
 try { Invoke-RestMethod "http://localhost:8000/health" | Out-Null; Write-Host "  voice-fallback: ok" -ForegroundColor Green }
 catch { Write-Host "  voice-fallback: NOT responding yet" -ForegroundColor Yellow }
 
+$envMap = @{}
+Get-Content "$root\.env" | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*)$') { $envMap[$matches[1].Trim()] = $matches[2] } }
+$webhookKey = $envMap['N8N_WEBHOOK_API_KEY']
+
 if ($IngestUrl) {
   Write-Host "`n=== ingesting $IngestUrl (this can take 1-3 minutes) ===" -ForegroundColor Cyan
   $body = @{ website_url = $IngestUrl } | ConvertTo-Json
-  $result = Invoke-RestMethod "http://localhost:5679/webhook/ingest" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 600
+  $result = Invoke-RestMethod "http://localhost:5679/webhook/ingest" -Method Post -Body $body -ContentType "application/json" -Headers @{ "X-Webhook-Key" = $webhookKey } -TimeoutSec 600
   $result | ConvertTo-Json -Depth 6
 }
 
 Write-Host "`n=== ready ===" -ForegroundColor Green
-Write-Host "Ingest a clinic:  curl -X POST http://localhost:5679/webhook/ingest -H `"Content-Type: application/json`" -d '{\"website_url\":\"https://example.com/\"}'"
-Write-Host "Ask a question:   curl -X POST http://localhost:5679/webhook/ask -H `"Content-Type: application/json`" -d '{\"query\":\"...\",\"website_url\":\"https://example.com/\"}'"
+Write-Host "All /webhook/* calls need: -H `"X-Webhook-Key: $webhookKey`""
+Write-Host "Ingest a clinic:  curl -X POST http://localhost:5679/webhook/ingest -H `"Content-Type: application/json`" -H `"X-Webhook-Key: $webhookKey`" -d '{\"website_url\":\"https://example.com/\"}'"
+Write-Host "Ask a question:   curl -X POST http://localhost:5679/webhook/ask -H `"Content-Type: application/json`" -H `"X-Webhook-Key: $webhookKey`" -d '{\"query\":\"...\",\"website_url\":\"https://example.com/\"}'"
 Write-Host "Voice client:     python -m http.server 8080 --directory client   (then open http://localhost:8080)"
 Write-Host "Run eval suite:   node scripts/run_eval.js"

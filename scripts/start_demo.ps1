@@ -49,9 +49,14 @@ if (-not ($clientUrl -and $voiceUrl -and $n8nUrl)) {
   exit 1
 }
 
+$envMap = @{}
+Get-Content "$root\.env" | ForEach-Object { if ($_ -match '^\s*([^#=]+)=(.*)$') { $envMap[$matches[1].Trim()] = $matches[2] } }
+$webhookKey = $envMap['N8N_WEBHOOK_API_KEY']
+
 $voiceEnc = [System.Uri]::EscapeDataString($voiceUrl)
 $n8nEnc = [System.Uri]::EscapeDataString($n8nUrl)
-$shareUrl = "$clientUrl/?voice=$voiceEnc&n8n=$n8nEnc"
+$keyEnc = [System.Uri]::EscapeDataString($webhookKey)
+$shareUrl = "$clientUrl/?voice=$voiceEnc&n8n=$n8nEnc&key=$keyEnc"
 
 Write-Host ""
 Write-Host "=== Share this URL with your team ===" -ForegroundColor Green

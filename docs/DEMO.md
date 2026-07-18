@@ -26,9 +26,11 @@ One command starts everything and prints the link to share:
 ```
 This starts the client's static server plus 3 separate tunnels (client, voice service, n8n) and prints one URL like:
 ```
-https://<random>.trycloudflare.com/?voice=https://<random>.trycloudflare.com&n8n=https://<random>.trycloudflare.com
+https://<random>.trycloudflare.com/?voice=https://<random>.trycloudflare.com&n8n=https://<random>.trycloudflare.com&key=<your-webhook-secret>
 ```
 **Why 3 tunnels and query params, not just one link:** the client's JavaScript would otherwise call `http://localhost:8000` and `http://localhost:5679` — but on a teammate's own device, "localhost" means *their* machine, not yours. The `?voice=...&n8n=...` query params override those defaults with the real tunnel addresses, so the link works correctly from any device. `client/app.js` reads them at load time; omit them (just open `client/index.html` locally) and it falls back to `localhost` for local development.
+
+**`?key=...`** carries the shared webhook secret required by every `/webhook/*` endpoint (see `docs/N8N_CONTROL.md`). `start_demo.ps1` reads it from `.env`'s `N8N_WEBHOOK_API_KEY` and bakes it into the printed link automatically. Since this is a browser page, the key is visible to anyone with the link regardless of how it's passed — it stops casual/automated abuse of a *found* URL, not a determined person actively using the shared link (see issue tracking this: a one-shot shared secret is a reasonable tradeoff for a short demo, not a substitute for real per-user auth on anything longer-lived).
 
 Quick tunnels are ephemeral — every time you re-run `start_demo.ps1` (or restart cloudflared), the hostnames change. Re-share the newly printed URL each time.
 
@@ -42,4 +44,4 @@ Tested with a real spoken question end-to-end, both locally and through the actu
 ## Known limitations
 - STT accuracy on brand-specific terms ("Invisalign") isn't perfect with the `base` Whisper model — the LLM classifier downstream is robust enough to compensate in the cases tested, but this isn't guaranteed for every phrasing.
 - Booking-via-voice and multi-turn voice conversations haven't been separately tested (the text orchestrator's booking flow and session memory are separately verified in Phase 8; only the voice *transport* layer was added here).
-- Quick tunnels have no authentication — anyone with the link can use it. Fine for a short team demo; not for anything longer-lived.
+- Every webhook now requires a shared `X-Webhook-Key` secret (baked into the shared link's `?key=` param), which stops a random scanner from finding and hitting an open tunnel URL - but it's one secret for everyone, visible in the URL/page to anyone the link is shared with. Fine for a short, trusted team demo; not real per-user authentication for anything longer-lived.

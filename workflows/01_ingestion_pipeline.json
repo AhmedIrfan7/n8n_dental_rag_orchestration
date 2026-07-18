@@ -7,7 +7,14 @@
         "path": "ingest",
         "responseMode": "lastNode",
         "responseData": "allEntries",
-        "options": {}
+        "options": {},
+        "authentication": "headerAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__WEBHOOK_AUTH_CRED_ID__",
+          "name": "Webhook Auth"
+        }
       },
       "id": "a1000000-0000-0000-0000-000000000001",
       "name": "Webhook",
@@ -103,6 +110,14 @@
         "jsonBody": "={{ JSON.stringify({ website_url: $json.website_url }) }}",
         "options": {
           "timeout": 600000
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__WEBHOOK_AUTH_CRED_ID__",
+          "name": "Webhook Auth"
         }
       },
       "id": "a1000000-0000-0000-0000-000000000007",

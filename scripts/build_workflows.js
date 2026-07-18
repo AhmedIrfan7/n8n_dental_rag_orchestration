@@ -12,6 +12,13 @@ const writeWf = (name, obj) => {
 };
 
 const PG_CRED = { postgres: { id: '__PG_CRED_ID__', name: 'Dental Postgres' } };
+// Every Webhook trigger requires this header (X-Webhook-Key: <secret>) to
+// respond at all - see docs/N8N_CONTROL.md. The same credential is reused
+// on outgoing HTTP Request nodes that call another workflow's webhook
+// internally, since n8n auto-attaches the credential's header either way.
+const WEBHOOK_AUTH_CRED = { httpHeaderAuth: { id: '__WEBHOOK_AUTH_CRED_ID__', name: 'Webhook Auth' } };
+const webhookAuthParams = { authentication: 'headerAuth' };
+const httpAuthParams = { authentication: 'predefinedCredentialType', nodeCredentialType: 'httpHeaderAuth' };
 
 // ---------------- 01_ingestion_pipeline ----------------
 const discover = read('scraping/discover.js');
@@ -23,7 +30,8 @@ writeWf('01_ingestion_pipeline.json', {
   name: '01_ingestion_pipeline',
   nodes: [
     {
-      parameters: { httpMethod: 'POST', path: 'ingest', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      parameters: { httpMethod: 'POST', path: 'ingest', responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'a1000000-0000-0000-0000-000000000001',
       name: 'Webhook',
       type: 'n8n-nodes-base.webhook',
@@ -81,8 +89,9 @@ writeWf('01_ingestion_pipeline.json', {
         method: 'POST', url: 'http://localhost:5678/webhook/extract',
         sendBody: true, specifyBody: 'json',
         jsonBody: '={{ JSON.stringify({ website_url: $json.website_url }) }}',
-        options: { timeout: 600000 },
+        options: { timeout: 600000 }, ...httpAuthParams,
       },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'a1000000-0000-0000-0000-000000000007',
       name: 'TriggerExtract',
       type: 'n8n-nodes-base.httpRequest',
@@ -110,7 +119,8 @@ const storeFactsSql = read('db/queries/store_facts.sql');
 writeWf('02_extract_facts.json', {
   name: '02_extract_facts',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'extract', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'extract', responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'b2000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-200, 0], webhookId: 'b2000000-0000-0000-0000-000000000001' },
     { parameters: { operation: 'executeQuery', query: loadPagesSql, options: { queryReplacement: '={{ [$json.body.website_url, $json.body.limit || null] }}' } },
       id: 'b2000000-0000-0000-0000-000000000002', name: 'LoadPages', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [20, 0], credentials: PG_CRED },
@@ -134,8 +144,9 @@ writeWf('02_extract_facts.json', {
         method: 'POST', url: 'http://localhost:5678/webhook/index',
         sendBody: true, specifyBody: 'json',
         jsonBody: '={{ JSON.stringify({ website_url: $(\'ParseFacts\').first().json.website_url }) }}',
-        options: { timeout: 600000 },
+        options: { timeout: 600000 }, ...httpAuthParams,
       },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'b2000000-0000-0000-0000-000000000007', name: 'TriggerIndex', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1120, 0] },
     { parameters: { jsCode: "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, extracted: c, indexed: $input.first().json } }];" },
       id: 'b2000000-0000-0000-0000-000000000008', name: 'Done', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1340, 0] },
@@ -159,7 +170,8 @@ const indexDocs = read('rag/index_docs.js');
 writeWf('03_build_index.json', {
   name: '03_build_index',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'index', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'index', responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'b3000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 0], webhookId: 'b3000000-0000-0000-0000-000000000001' },
     { parameters: { operation: 'executeQuery', query: loadDocsSql, options: { queryReplacement: '={{ [$json.body.website_url] }}' } },
       id: 'b3000000-0000-0000-0000-000000000002', name: 'LoadDocs', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [220, 0], credentials: PG_CRED },
@@ -179,7 +191,8 @@ const retrieveJs = read('rag/retrieve.js');
 writeWf('04_retriever.json', {
   name: '04_retriever',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'retrieve', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'retrieve', responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'b4000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 0], webhookId: 'b4000000-0000-0000-0000-000000000001' },
     { parameters: { jsCode: retrieveJs },
       id: 'b4000000-0000-0000-0000-000000000002', name: 'Retrieve', type: 'n8n-nodes-base.code', typeVersion: 2, position: [220, 0] },
@@ -213,7 +226,8 @@ function buildSubAgentWorkflow(opts) {
   writeWf(opts.fileName, {
     name: opts.workflowName,
     nodes: [
-      { parameters: { httpMethod: 'POST', path: opts.webhookPath, responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      { parameters: { httpMethod: 'POST', path: opts.webhookPath, responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+        credentials: WEBHOOK_AUTH_CRED,
         id: opts.idPrefix + '01', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-200, 0], webhookId: opts.idPrefix + '01' },
       { parameters: { jsCode: retrieveWithFilter },
         id: opts.idPrefix + '02', name: 'Retrieve', type: 'n8n-nodes-base.code', typeVersion: 2, position: [0, 0] },
@@ -288,7 +302,8 @@ const formatBookingReply = read('booking/format_reply.js');
 writeWf('11_booking_agent.json', {
   name: '11_booking_agent',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'agent/booking', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'agent/booking', responseMode: 'lastNode', responseData: 'allEntries', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'c1100000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-620, 0], webhookId: 'c1100000-0000-0000-0000-000000000001' },
     { parameters: { operation: 'executeQuery', query: lookupClinicSql, options: { queryReplacement: '={{ [$json.body.website_url] }}' } },
       id: 'c1100000-0000-0000-0000-000000000002', name: 'LookupClinic', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-400, 0], credentials: PG_CRED },
@@ -354,7 +369,8 @@ const composeResponse = read('orchestrator/compose_response.js');
 writeWf('10_orchestrator.json', {
   name: '10_orchestrator',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: { allowedOrigins: '*' } },
+    { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: { allowedOrigins: '*' }, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'a0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-1080, 0], webhookId: 'a0000000-0000-0000-0000-000000000001' },
     { parameters: { jsCode: prepSession },
       id: 'a0000000-0000-0000-0000-00000000000b', name: 'PrepSession', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-860, 0] },
@@ -439,7 +455,8 @@ const VOICE_BASE_URL = 'http://dental-voice:8000';
 writeWf('05_voice_ask.json', {
   name: '05_voice_ask',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'voice/ask', responseMode: 'lastNode', responseData: 'firstEntryBinary', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'voice/ask', responseMode: 'lastNode', responseData: 'firstEntryBinary', options: {}, ...webhookAuthParams },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'd0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-400, 0], webhookId: 'd0000000-0000-0000-0000-000000000001' },
     { parameters: {
         method: 'POST', url: VOICE_BASE_URL + '/transcribe',
@@ -453,8 +470,9 @@ writeWf('05_voice_ask.json', {
     { parameters: {
         method: 'POST', url: 'http://localhost:5678/webhook/ask',
         sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json) }}',
-        options: { timeout: 90000 },
+        options: { timeout: 90000 }, ...httpAuthParams,
       },
+      credentials: WEBHOOK_AUTH_CRED,
       id: 'd0000000-0000-0000-0000-000000000004', name: 'AskOrchestrator', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [260, 0] },
     { parameters: { jsCode: prepSpeak },
       id: 'd0000000-0000-0000-0000-000000000005', name: 'PrepSpeak', type: 'n8n-nodes-base.code', typeVersion: 2, position: [480, 0] },
