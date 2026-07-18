@@ -271,7 +271,7 @@ buildSubAgentWorkflow({
   idPrefix: 'c1400000-0000-0000-0000-0000000000',
   agentRole: 'General Knowledge Agent',
   agentRules: 'Answer questions about the clinic itself: doctors, location, contact info, policies, and about-us content, using only the context provided.',
-  typeFilter: ['doctor', 'policy', 'page'],
+  typeFilter: ['doctor', 'policy', 'page', 'hours'],
 });
 
 // ---------------- 11_booking_agent ----------------

@@ -31,8 +31,14 @@ Probes 3 and 5 initially "failed" against a naive `grounded === false` assertion
 ## Bonus finding: RAG compensates for a structured-extraction gap
 The `clinic` fact table (name/phone/email/address) is still empty — the contact page's info is JS-rendered and the static-HTML extraction pipeline (documented limitation since Phase 3) can't see it. Despite that, the multi-intent test's reply correctly surfaced a real phone number and street address (`305-373-7799`, `175 SW 7th St, Suite 1408, Miami, FL 33130`) — because that text exists verbatim somewhere in the crawled page content, which the RAG layer retrieved and grounded on directly. The system degrades gracefully: a gap in structured extraction doesn't become a hallucination, because the raw-page RAG path picks up the slack.
 
-## Genericity (the "just give me a URL" requirement)
-Not re-verified against a second live external site in this session — the pipeline was already proven generic architecturally (every query is parameterized by `website_url` end-to-end, the schema is multi-tenant via `clinic_id`, nothing in the code hardcodes deroodeortho.com), and avoiding an unnecessary scrape of an unrelated third-party site seemed like the right call given today's already-strained network conditions. Worth a live confirmation against a second clinic site in a future session.
+## Genericity — verified live against a second, unrelated clinic
+Ingested `https://www.ortegaortho.com/` (a real, different orthodontic practice) with the exact same `POST /webhook/ingest {website_url}` call, no code changes: **23 services, 4 doctors, 19 FAQs, 2 pricing rows, 7 hours rows, 1 policy — 75 pages → 317 chunks, in 104.6s.**
+
+Cross-checked both clinics for correct isolation (same DB, same Qdrant collection, filtered by `clinic_id`/`website_url`):
+- "who is the orthodontist" against Ortega → *"Dr. William 'Vaughn' Holland..."* (correct, not deRoode)
+- "who is the orthodontist" against deroodeortho, same session → still correctly *"Dr. Elaine deRoode..."* (no cross-contamination either direction)
+
+**A real gap this test found, and the fix:** Ortega's hours were correctly extracted into Postgres (Mon–Thu 7:30–16:30, closed Fri–Sun) but the assistant still said *"I don't have the clinic's opening hours available"* — because `db/queries/load_docs.sql` indexed pages/faqs/services/pricing/doctors/policies into Qdrant but never included `hours`. This went unnoticed with the first clinic only because deroodeortho genuinely has zero hours rows, so "I don't know" was coincidentally the correct answer for the wrong reason. Fixed by adding `hours` as an indexable synthetic document (one row per clinic, all 7 days combined into a readable block) and adding `hours` to the general-knowledge agent's retrieval filter. Re-indexed Ortega (`docs` 75→76, exactly +1) and re-tested: *"The clinic opens at 7:30 AM and closes at 4:30 PM from Monday to Thursday. We are closed on Friday, Saturday, and Sunday."* — correct, matches Postgres exactly. Re-ran the full eval suite afterward: still 14/14, no regression.
 
 ## Latency
 Average 4.2s end-to-end (classify → parallel sub-agent(s) → synthesize → persist). Off-topic fallback is fastest (760ms — skips the LLM synthesis pass entirely). Multi-intent and booking-with-full-slots are the slowest (parallel agent calls + a synthesis pass), still well under 10s.

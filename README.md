@@ -102,7 +102,7 @@ To share a live link with a team: **[docs/DEMO.md](docs/DEMO.md)**.
 - STT on domain-specific brand names ("Invisalign") isn't perfect with the current Whisper model — verified acceptable in practice (the orchestrator's classifier tends to understand it anyway) but not guaranteed for every phrasing.
 - `voicebox` (the richer voice backend originally named in the brief) never completed building in this environment; `voice/fallback` is the real, working backend. See `docs/adr/0002-voice-fallback-over-voicebox.md`.
 - The demo tunnel setup (`cloudflared` quick tunnels) has no authentication — fine for a short team demo, not for a long-lived deployment.
-- Genericity across clinics is architectural (every query is parameterized by `website_url`; nothing is hardcoded) but was not re-verified live against a second clinic's site in this session.
+- ~~Genericity not re-verified against a second clinic~~ **Verified**: ingested a second, unrelated real clinic (ortegaortho.com) with zero code changes — 23 services/4 doctors/19 FAQs/7 hours rows extracted, both clinics' data confirmed isolated (asking each clinic "who is the orthodontist" correctly returns its own doctor, never the other's). Found and fixed a real gap in the process: `hours` facts were extracted into Postgres but never indexed for retrieval — see `docs/EVAL_REPORT.md`.
 
 ## License
 MIT — see [LICENSE](LICENSE).

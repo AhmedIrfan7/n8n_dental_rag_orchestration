@@ -24,7 +24,8 @@ Schema in [`db/migrations/0001_init.sql`](../db/migrations/0001_init.sql). Mirro
 
 ## Qdrant — vectors
 - Collection **`clinic_kb`**: 768-dim (nomic-embed-text), cosine.
-- Payload: `url`, `section`, `type` (service|faq|pricing|policy|general), `page_type`, `service_name`, `doctor`, `source_id` (→ `pages_raw.id` for citation).
+- Payload: `url`, `section`, `type` (page|faq|service|pricing|doctor|policy|hours), `page_type`, `service_name`, `doctor`, `source_id` (→ `pages_raw.id` for citation).
+- `hours` is indexed as one synthetic document per clinic (all 7 days combined) — added after a second-clinic genericity test found it was extracted into Postgres but never made retrievable; see `docs/EVAL_REPORT.md`.
 - Payload indexes on `type`, `page_type`, `service_name` for filtered retrieval per sub-agent.
 - Created via [`scripts/init_qdrant.ps1`](../scripts/init_qdrant.ps1).
 
