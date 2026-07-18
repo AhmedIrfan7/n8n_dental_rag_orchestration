@@ -14,7 +14,7 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -400,
+        -620,
         0
       ],
       "webhookId": "c1100000-0000-0000-0000-000000000001"
@@ -32,7 +32,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        -180,
+        -400,
         0
       ],
       "credentials": {
@@ -44,7 +44,66 @@
     },
     {
       "parameters": {
-        "jsCode": "// Booking slot extraction — build the OpenAI request (Code node).\n// Input : webhook body { query, website_url } (read via named reference since\n//         LookupClinic sits between Webhook and this node, so $input here is\n//         the Postgres row, not the webhook payload).\n// Output: { query, website_url, oai_body }\nconst webhookJson = $('Webhook').first().json;\nconst body = webhookJson.body || webhookJson || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\nconst today = new Date().toISOString().slice(0, 10);\n\nconst sys = [\n  \"Extract a dental/orthodontic appointment request from the patient's message.\",\n  'Today\\'s date is ' + today + ' (YYYY-MM-DD). Resolve relative dates (\"next Monday\", \"tomorrow\") against it; use null if you cannot resolve a date confidently.',\n  'Return ONLY JSON: { \"service_name\": string|null, \"preferred_date\": \"YYYY-MM-DD\"|null, \"preferred_time\": \"HH:MM\"|null (24h), \"patient_name\": string|null, \"patient_contact\": string|null }',\n  'Do not invent values not implied by the message. Leave a field null if absent.',\n].join('\\n');\n\nreturn [{\n  json: {\n    query, website_url: body.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: query },\n      ],\n    },\n  },\n}];\n"
+        "jsCode": "// Validate session_id shape before it reaches a Postgres ::uuid cast\n// (an invalid cast throws). Runs right after Webhook.\nconst webhookJson = $input.first().json;\nconst body = webhookJson.body || webhookJson || {};\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst session_id = (typeof body.session_id === 'string' && uuidRe.test(body.session_id)) ? body.session_id : null;\nreturn [{ json: { session_id } }];\n"
+      },
+      "id": "c1100000-0000-0000-0000-00000000000b",
+      "name": "PrepBookingSession",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Resolve a session: reuse if the client supplied a known id, create one\n-- otherwise (using the client's id if given and unknown, so the FIRST call\n-- of a new conversation still gets a stable id from here on).\n-- Param: $1 session_id (nullable UUID text)\n-- Always returns exactly 1 row (see store_facts.sql lesson: never let\n-- RETURNING depend on a single conditional branch alone).\nWITH existing AS (\n  SELECT id FROM sessions WHERE $1::uuid IS NOT NULL AND id = $1::uuid\n),\nupd AS (\n  UPDATE sessions SET last_active_at = now() WHERE id IN (SELECT id FROM existing) RETURNING id\n),\nins AS (\n  INSERT INTO sessions (id, channel)\n  SELECT COALESCE($1::uuid, gen_random_uuid()), 'text'\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n  RETURNING id\n)\nSELECT id FROM upd\nUNION ALL\nSELECT id FROM ins;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-000000000010",
+      "name": "EnsureSession",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -290,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Param: $1 session_id (nullable UUID text)\n-- Always returns exactly 1 row: the open booking if one exists, otherwise\n-- a NULL-filled sentinel (id IS NULL means \"no open booking\") so the\n-- downstream Code node always gets exactly 1 input item to run on.\nWITH found AS (\n  SELECT id, service_name, preferred_date, preferred_time, patient_name, patient_contact, status\n  FROM booking_requests\n  WHERE $1::uuid IS NOT NULL AND session_id = $1::uuid AND status = 'collecting'\n  ORDER BY id DESC\n  LIMIT 1\n)\nSELECT id, service_name, preferred_date, preferred_time, patient_name, patient_contact, status FROM found\nUNION ALL\nSELECT NULL, NULL, NULL, NULL, NULL, NULL, NULL\nWHERE NOT EXISTS (SELECT 1 FROM found);\n",
+        "options": {
+          "queryReplacement": "={{ [$json.id] }}"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-00000000000c",
+      "name": "FindOpenBooking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -180,
+        160
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Booking slot extraction — build the OpenAI request (Code node).\n// Input : webhook body { query, website_url, session_id? } (read via named\n//         reference since LookupClinic/FindOpenBooking sit between Webhook\n//         and this node, so $input here is FindOpenBooking's row, not the\n//         webhook payload). Also sees any already-collected slots for this\n//         session so the model can fill gaps rather than re-asking.\n// Output: { query, website_url, session_id, has_open, oai_body }\nconst webhookJson = $('Webhook').first().json;\nconst body = webhookJson.body || webhookJson || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\n\nconst session_id = $('EnsureSession').first().json.id;\n\nconst openRows = $('FindOpenBooking').all().map(function (i) { return i.json; });\nconst open = (openRows.length && openRows[0].id != null) ? openRows[0] : null;\n\nconst today = new Date().toISOString().slice(0, 10);\nconst priorLine = open\n  ? 'ALREADY COLLECTED THIS CONVERSATION (do not lose these unless the new message changes them): ' +\n    JSON.stringify({ service_name: open.service_name, preferred_date: open.preferred_date, preferred_time: open.preferred_time, patient_name: open.patient_name, patient_contact: open.patient_contact }) + '\\n'\n  : '';\n\nconst sys = [\n  \"Extract a dental/orthodontic appointment request from the patient's message.\",\n  'Today\\'s date is ' + today + ' (YYYY-MM-DD). Resolve relative dates (\"next Monday\", \"tomorrow\") against it; use null if you cannot resolve a date confidently.',\n  priorLine + 'Return ONLY the NEW information found in the LATEST message below (leave a field null if this specific message does not mention it - prior values are merged in separately, do not repeat them).',\n  'JSON shape: { \"service_name\": string|null, \"preferred_date\": \"YYYY-MM-DD\"|null, \"preferred_time\": \"HH:MM\"|null (24h), \"patient_name\": string|null, \"patient_contact\": string|null }',\n  'Do not invent values not implied by the message.',\n].join('\\n');\n\nreturn [{\n  json: {\n    query, website_url: body.website_url, session_id, has_open: !!open,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: 'LATEST MESSAGE: ' + query },\n      ],\n    },\n  },\n}];\n"
       },
       "id": "c1100000-0000-0000-0000-000000000003",
       "name": "BuildBookingReq",
@@ -52,7 +111,7 @@
       "typeVersion": 2,
       "position": [
         40,
-        0
+        80
       ]
     },
     {
@@ -74,7 +133,7 @@
       "typeVersion": 4.2,
       "position": [
         260,
-        0
+        80
       ],
       "retryOnFail": true,
       "maxTries": 3,
@@ -88,7 +147,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse extracted booking slots, decide status, prep DB params (Code node).\n// Input : OpenAI response (from BuildBookingReq's oai_body).\nconst query = $('BuildBookingReq').first().json.query;\nconst clinicRows = $('LookupClinic').all().map(function (i) { return i.json; });\nconst clinic = clinicRows.length ? clinicRows[0] : null;\n\nlet slots = {};\ntry { slots = JSON.parse($input.first().json.choices[0].message.content); } catch (e) { slots = {}; }\n\nconst service_name = slots.service_name || null;\nconst preferred_date = slots.preferred_date || null;\nconst preferred_time = slots.preferred_time || null;\nconst patient_name = slots.patient_name || null;\nconst patient_contact = slots.patient_contact || null;\n\nconst missing = [];\nif (!service_name) missing.push('service');\nif (!preferred_date && !preferred_time) missing.push('preferred date or time');\nif (!patient_name) missing.push('your name');\n\nconst status = missing.length === 0 ? 'confirming' : 'collecting';\n\nreturn [{\n  json: {\n    query,\n    clinic_id: clinic ? clinic.id : null,\n    clinic_name: clinic ? clinic.name : null,\n    clinic_phone: clinic ? clinic.phone : null,\n    clinic_booking_url: clinic ? clinic.booking_url : null,\n    service_name, preferred_date, preferred_time, patient_name, patient_contact,\n    status, missing,\n  },\n}];\n"
+        "jsCode": "// Parse extracted booking slots, MERGE with any already-open booking for\n// this session, decide status, prep DB params (Code node).\n// Input : OpenAI response (from BuildBookingReq's oai_body).\nconst req = $('BuildBookingReq').first().json;\nconst query = req.query;\nconst clinicRows = $('LookupClinic').all().map(function (i) { return i.json; });\nconst clinic = clinicRows.length ? clinicRows[0] : null;\nconst openRows = $('FindOpenBooking').all().map(function (i) { return i.json; });\nconst open = (openRows.length && openRows[0].id != null) ? openRows[0] : null;\n\nlet slots = {};\ntry { slots = JSON.parse($input.first().json.choices[0].message.content); } catch (e) { slots = {}; }\n\n// New values win when present this turn; otherwise carry forward the\n// already-collected ones from the open booking (if any).\nconst service_name = slots.service_name || (open && open.service_name) || null;\nconst preferred_date = slots.preferred_date || (open && open.preferred_date) || null;\nconst preferred_time = slots.preferred_time || (open && open.preferred_time) || null;\nconst patient_name = slots.patient_name || (open && open.patient_name) || null;\nconst patient_contact = slots.patient_contact || (open && open.patient_contact) || null;\n\nconst missing = [];\nif (!service_name) missing.push('service');\nif (!preferred_date && !preferred_time) missing.push('preferred date or time');\nif (!patient_name) missing.push('your name');\n\nconst status = missing.length === 0 ? 'confirming' : 'collecting';\n\nreturn [{\n  json: {\n    query,\n    booking_id: open ? open.id : null,\n    is_update: !!open,\n    clinic_id: clinic ? clinic.id : null,\n    clinic_name: clinic ? clinic.name : null,\n    clinic_phone: clinic ? clinic.phone : null,\n    clinic_booking_url: clinic ? clinic.booking_url : null,\n    session_id: req.session_id,\n    service_name, preferred_date, preferred_time, patient_name, patient_contact,\n    status, missing,\n  },\n}];\n"
       },
       "id": "c1100000-0000-0000-0000-000000000005",
       "name": "ParseSlots",
@@ -96,15 +155,70 @@
       "typeVersion": 2,
       "position": [
         480,
-        0
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.is_update }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-00000000000d",
+      "name": "IsUpdate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        700,
+        80
       ]
     },
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "-- Params: $1 clinic_id, $2 service_name, $3 preferred_date, $4 preferred_time,\n--         $5 patient_name, $6 patient_contact, $7 status, $8 notes\nINSERT INTO booking_requests\n  (clinic_id, service_name, preferred_date, preferred_time, patient_name, patient_contact, status, notes)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8)\nRETURNING id, status;\n",
+        "query": "-- Merge newly-extracted slots into an existing open booking request.\n-- Params: $1 id, $2 service_name, $3 preferred_date, $4 preferred_time,\n--         $5 patient_name, $6 patient_contact, $7 status\nUPDATE booking_requests SET\n  service_name    = COALESCE($2, service_name),\n  preferred_date  = COALESCE($3, preferred_date),\n  preferred_time  = COALESCE($4, preferred_time),\n  patient_name    = COALESCE($5, patient_name),\n  patient_contact = COALESCE($6, patient_contact),\n  status          = $7,\n  updated_at      = now()\nWHERE id = $1\nRETURNING id, status;\n",
         "options": {
-          "queryReplacement": "={{ [$json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}"
+          "queryReplacement": "={{ [$json.booking_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status] }}"
+        }
+      },
+      "id": "c1100000-0000-0000-0000-00000000000e",
+      "name": "UpdateBooking",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        920,
+        -20
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Params: $1 session_id (nullable UUID text), $2 clinic_id, $3 service_name,\n--         $4 preferred_date, $5 preferred_time, $6 patient_name,\n--         $7 patient_contact, $8 status, $9 notes\nINSERT INTO booking_requests\n  (session_id, clinic_id, service_name, preferred_date, preferred_time, patient_name, patient_contact, status, notes)\nVALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9)\nRETURNING id, status;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, $json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}"
         }
       },
       "id": "c1100000-0000-0000-0000-000000000006",
@@ -112,8 +226,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        700,
-        0
+        920,
+        180
       ],
       "credentials": {
         "postgres": {
@@ -131,8 +245,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        920,
-        0
+        1140,
+        80
       ]
     }
   ],
@@ -144,11 +258,38 @@
             "node": "LookupClinic",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "PrepBookingSession",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
     },
-    "LookupClinic": {
+    "PrepBookingSession": {
+      "main": [
+        [
+          {
+            "node": "EnsureSession",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EnsureSession": {
+      "main": [
+        [
+          {
+            "node": "FindOpenBooking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FindOpenBooking": {
       "main": [
         [
           {
@@ -185,7 +326,36 @@
       "main": [
         [
           {
+            "node": "IsUpdate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsUpdate": {
+      "main": [
+        [
+          {
+            "node": "UpdateBooking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "InsertBooking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UpdateBooking": {
+      "main": [
+        [
+          {
+            "node": "FormatReply",
             "type": "main",
             "index": 0
           }

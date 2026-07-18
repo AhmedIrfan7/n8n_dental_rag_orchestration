@@ -14,21 +14,80 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -600,
+        -1080,
         0
       ],
       "webhookId": "a0000000-0000-0000-0000-000000000001"
     },
     {
       "parameters": {
-        "jsCode": "// Intent Classifier — build the OpenAI request (Code node).\n// Input : webhook body { query, session_id?, website_url }\n// Output: { query, session_id, website_url, oai_body }\nconst body = $input.first().json.body || $input.first().json || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\n\nconst sys = [\n  'Classify a dental/orthodontic clinic chatbot query into one or more intents.',\n  'Intents: \"pricing\" (cost/price/insurance questions), \"services\" (treatments, FAQs, general dental/ortho questions),',\n  '\"general\" (clinic info: doctors, location, contact, policies, about), \"booking\" (scheduling/appointment requests).',\n  'A query can match multiple intents. Return ONLY JSON:',\n  '{ \"intents\": [ { \"name\": \"pricing\"|\"services\"|\"general\"|\"booking\", \"confidence\": 0.0-1.0 } ] }',\n  'Include only intents that are plausibly relevant; omit ones that clearly do not apply.',\n  'If the query is unrelated to a dental/orthodontic clinic (e.g. general trivia, unrelated topics), return { \"intents\": [] }.',\n].join('\\n');\n\nreturn [{\n  json: {\n    query, session_id: body.session_id || null, website_url: body.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: query },\n      ],\n    },\n  },\n}];\n"
+        "jsCode": "// Validate the incoming request (Code node, first after Webhook).\n// A malformed/absent session_id must never reach a Postgres ::uuid cast\n// (that throws), so validate the shape here and null it out otherwise.\nconst body = $input.first().json.body || $input.first().json || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\n\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst raw = body.session_id;\nconst session_id = (typeof raw === 'string' && uuidRe.test(raw)) ? raw : null;\n\nreturn [{ json: { query, website_url: body.website_url, session_id } }];\n"
+      },
+      "id": "a0000000-0000-0000-0000-00000000000b",
+      "name": "PrepSession",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Resolve a session: reuse if the client supplied a known id, create one\n-- otherwise (using the client's id if given and unknown, so the FIRST call\n-- of a new conversation still gets a stable id from here on).\n-- Param: $1 session_id (nullable UUID text)\n-- Always returns exactly 1 row (see store_facts.sql lesson: never let\n-- RETURNING depend on a single conditional branch alone).\nWITH existing AS (\n  SELECT id FROM sessions WHERE $1::uuid IS NOT NULL AND id = $1::uuid\n),\nupd AS (\n  UPDATE sessions SET last_active_at = now() WHERE id IN (SELECT id FROM existing) RETURNING id\n),\nins AS (\n  INSERT INTO sessions (id, channel)\n  SELECT COALESCE($1::uuid, gen_random_uuid()), 'text'\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n  RETURNING id\n)\nSELECT id FROM upd\nUNION ALL\nSELECT id FROM ins;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id] }}"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-00000000000c",
+      "name": "GetOrCreateSession",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -640,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Recent conversation turns, oldest first, as ONE row (always exactly 1\n-- row regardless of history length - a downstream wrapper node does NOT\n-- fix a 0-row SELECT, since it too would receive 0 items and be skipped;\n-- the aggregation must happen here, at the SQL level).\n-- Params: $1 session_id, $2 max messages (nullable, default 8)\nSELECT COALESCE(\n  (SELECT jsonb_agg(t ORDER BY t.id) FROM (\n    SELECT id, role, content FROM messages\n    WHERE session_id = $1\n    ORDER BY id DESC\n    LIMIT COALESCE($2::int, 8)\n  ) t),\n  '[]'::jsonb\n) AS history;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.id, 8] }}"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-00000000000d",
+      "name": "LoadHistory",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -420,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Intent Classifier — build the OpenAI request (Code node).\n// Input : this node's own $input is LoadHistory's rows; query/website_url\n//         come from PrepSession, the resolved session id from GetOrCreateSession.\n// Output: { query, session_id, website_url, oai_body }\nconst prep = $('PrepSession').first().json;\nconst query = prep.query;\nconst session_id = $('GetOrCreateSession').first().json.id;\nconst history = $input.first().json.history || []; // [{role, content}] (PackHistory wraps LoadHistory's rows)\n\nconst sys = [\n  'Classify a dental/orthodontic clinic chatbot query into one or more intents.',\n  'Intents: \"pricing\" (cost/price/insurance questions), \"services\" (treatments, FAQs, general dental/ortho questions),',\n  '\"general\" (clinic info: doctors, location, contact, policies, about), \"booking\" (scheduling/appointment requests).',\n  'A query can match multiple intents. Use the recent conversation to resolve follow-ups (\"what about that\", \"and the price?\").',\n  'Return ONLY JSON:',\n  '{ \"intents\": [ { \"name\": \"pricing\"|\"services\"|\"general\"|\"booking\", \"confidence\": 0.0-1.0 } ] }',\n  'Include only intents that are plausibly relevant; omit ones that clearly do not apply.',\n  'If the query is unrelated to a dental/orthodontic clinic (e.g. general trivia, unrelated topics), return { \"intents\": [] }.',\n].join('\\n');\n\nconst historyText = history.length\n  ? 'RECENT CONVERSATION:\\n' + history.map(function (h) { return h.role + ': ' + h.content; }).join('\\n') + '\\n\\n'\n  : '';\n\nreturn [{\n  json: {\n    query, session_id, website_url: prep.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: historyText + 'LATEST MESSAGE: ' + query },\n      ],\n    },\n  },\n}];\n"
       },
       "id": "a0000000-0000-0000-0000-000000000002",
       "name": "ClassifyIntent",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -380,
+        -200,
         0
       ]
     },
@@ -50,7 +109,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -160,
+        20,
         0
       ],
       "retryOnFail": true,
@@ -65,14 +124,14 @@
     },
     {
       "parameters": {
-        "jsCode": "// Router + Parallel Executor — n8n Code node (Run Once for All Items).\n// Parses the classifier's intents, fans out to the relevant sub-agent\n// webhooks CONCURRENTLY via Promise.all (true parallel execution, not\n// sequential HTTP nodes), and tolerates partial failures (one agent\n// erroring/timing out does not fail the whole request).\nconst helpers = this.helpers;\nconst CONFIDENCE_THRESHOLD = 0.4;\nconst AGENT_TIMEOUT_MS = 60000;\nconst BASE = 'http://localhost:5678/webhook/';\nconst AGENT_PATHS = {\n  pricing: 'agent/pricing',\n  services: 'agent/services-faq',\n  general: 'agent/general',\n  booking: 'agent/booking',\n};\n\nconst cls = $('ClassifyIntent').first().json;\nconst query = cls.query;\nconst session_id = cls.session_id;\nconst website_url = cls.website_url;\n\nlet intents = [];\ntry { intents = (JSON.parse($input.first().json.choices[0].message.content).intents) || []; } catch (e) { intents = []; }\nconst routed = intents.filter(function (i) { return i && AGENT_PATHS[i.name] && i.confidence >= CONFIDENCE_THRESHOLD; });\n\nasync function callAgent(name, path) {\n  try {\n    let res = await helpers.httpRequest({\n      method: 'POST', url: BASE + path,\n      body: { query, website_url, session_id }, json: true, timeout: AGENT_TIMEOUT_MS,\n    });\n    // Sub-agent webhooks respond with responseData:'allEntries', so the raw\n    // body is a JSON array of items (n8n's dedicated HTTP Request node\n    // auto-unwraps this; helpers.httpRequest called from a Code node does not).\n    if (Array.isArray(res)) res = res[0] || {};\n    return { intent: name, ok: true, ...res };\n  } catch (e) {\n    return { intent: name, ok: false, error: String((e && e.message) || e) };\n  }\n}\n\nlet results;\nlet usedFallback = false;\nif (routed.length === 0) {\n  usedFallback = true;\n  results = [{\n    intent: 'fallback', ok: true, grounded: false,\n    answer: \"I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?\",\n  }];\n} else {\n  results = await Promise.all(routed.map(function (r) { return callAgent(r.name, AGENT_PATHS[r.name]); }));\n}\n\nreturn [{\n  json: {\n    query, session_id, website_url,\n    intents: intents,\n    routed: routed.map(function (r) { return r.name; }),\n    used_fallback: usedFallback,\n    agent_results: results,\n  },\n}];\n"
+        "jsCode": "// Router + Parallel Executor — n8n Code node (Run Once for All Items).\n// Parses the classifier's intents, fans out to the relevant sub-agent\n// webhooks CONCURRENTLY via Promise.all (true parallel execution, not\n// sequential HTTP nodes), and tolerates partial failures (one agent\n// erroring/timing out does not fail the whole request).\nconst helpers = this.helpers;\nconst CONFIDENCE_THRESHOLD = 0.4;\nconst AGENT_TIMEOUT_MS = 60000;\nconst BASE = 'http://localhost:5678/webhook/';\nconst AGENT_PATHS = {\n  pricing: 'agent/pricing',\n  services: 'agent/services-faq',\n  general: 'agent/general',\n  booking: 'agent/booking',\n};\n\nconst cls = $('ClassifyIntent').first().json;\nconst query = cls.query;\nconst session_id = cls.session_id;\nconst website_url = cls.website_url;\nconst history = $('LoadHistory').first().json.history || []; // LoadHistory returns 1 row with a jsonb array field\n\nlet intents = [];\ntry { intents = (JSON.parse($input.first().json.choices[0].message.content).intents) || []; } catch (e) { intents = []; }\nconst routed = intents.filter(function (i) { return i && AGENT_PATHS[i.name] && i.confidence >= CONFIDENCE_THRESHOLD; });\n\nasync function callAgent(name, path) {\n  try {\n    let res = await helpers.httpRequest({\n      method: 'POST', url: BASE + path,\n      body: { query, website_url, session_id, history }, json: true, timeout: AGENT_TIMEOUT_MS,\n    });\n    // Sub-agent webhooks respond with responseData:'allEntries', so the raw\n    // body is a JSON array of items (n8n's dedicated HTTP Request node\n    // auto-unwraps this; helpers.httpRequest called from a Code node does not).\n    if (Array.isArray(res)) res = res[0] || {};\n    return { intent: name, ok: true, ...res };\n  } catch (e) {\n    return { intent: name, ok: false, error: String((e && e.message) || e) };\n  }\n}\n\nlet results;\nlet usedFallback = false;\nif (routed.length === 0) {\n  usedFallback = true;\n  results = [{\n    intent: 'fallback', ok: true, grounded: false,\n    answer: \"I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?\",\n  }];\n} else {\n  results = await Promise.all(routed.map(function (r) { return callAgent(r.name, AGENT_PATHS[r.name]); }));\n}\n\nreturn [{\n  json: {\n    query, session_id, website_url,\n    intents: intents,\n    routed: routed.map(function (r) { return r.name; }),\n    used_fallback: usedFallback,\n    agent_results: results,\n  },\n}];\n"
       },
       "id": "a0000000-0000-0000-0000-000000000004",
       "name": "RouteAndCall",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        60,
+        240,
         0
       ]
     },
@@ -85,7 +144,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        280,
+        460,
         0
       ]
     },
@@ -98,7 +157,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        500,
+        680,
         0
       ]
     },
@@ -130,20 +189,20 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        720,
+        900,
         0
       ]
     },
     {
       "parameters": {
-        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
+        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    query: merged.query,\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
       },
       "id": "a0000000-0000-0000-0000-000000000008",
       "name": "FinalizeSkip",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        940,
+        1120,
         80
       ]
     },
@@ -165,7 +224,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        940,
+        1120,
         -80
       ],
       "retryOnFail": true,
@@ -180,20 +239,125 @@
     },
     {
       "parameters": {
-        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
+        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    query: merged.query,\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
       },
       "id": "a0000000-0000-0000-0000-00000000000a",
       "name": "FinalizeSynth",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1160,
+        1340,
         -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Params: $1 session_id, $2 role, $3 content, $4 intents(json text|null), $5 sources(json text|null)\nINSERT INTO messages (session_id, role, content, intents, sources)\nVALUES ($1, $2, $3, $4::jsonb, $5::jsonb)\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, 'user', $json.query, null, null] }}"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-00000000000e",
+      "name": "SaveUserMsg",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1560,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Resolve whichever Finalize branch executed (referencing a node that did\n// NOT run in this execution path throws, not returns undefined - so this\n// must be a try/catch, never a ternary on $('Node').first()).\nfunction tryGet(nodeName) {\n  try { const v = $(nodeName).first(); return v ? v.json : null; } catch (e) { return null; }\n}\nconst f = tryGet('FinalizeSkip') || tryGet('FinalizeSynth');\n\nreturn [{\n  json: {\n    query: f.query, reply: f.reply, session_id: f.session_id,\n    intents: f.intents, routed: f.routed, grounded: f.grounded, sources: f.sources,\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000011",
+      "name": "PrepAssistantMsg",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Params: $1 session_id, $2 role, $3 content, $4 intents(json text|null), $5 sources(json text|null)\nINSERT INTO messages (session_id, role, content, intents, sources)\nVALUES ($1, $2, $3, $4::jsonb, $5::jsonb)\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [$json.session_id, 'assistant', $json.reply, JSON.stringify($json.intents || []), JSON.stringify($json.sources || [])] }}"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-00000000000f",
+      "name": "SaveAssistantMsg",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2000,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "__PG_CRED_ID__",
+          "name": "Dental Postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Terminal node - runs after SaveAssistantMsg (whose own output is a\n// {id} row, not the reply). Read the already-resolved data from\n// PrepAssistantMsg to build the orchestrator's response shape.\nconst f = $('PrepAssistantMsg').first().json;\n\nreturn [{\n  json: {\n    reply: f.reply,\n    session_id: f.session_id,\n    intents: f.intents,\n    routed: f.routed,\n    grounded: f.grounded,\n    sources: f.sources,\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000010",
+      "name": "ComposeResponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        0
       ]
     }
   ],
   "connections": {
     "Webhook": {
+      "main": [
+        [
+          {
+            "node": "PrepSession",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepSession": {
+      "main": [
+        [
+          {
+            "node": "GetOrCreateSession",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GetOrCreateSession": {
+      "main": [
+        [
+          {
+            "node": "LoadHistory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LoadHistory": {
       "main": [
         [
           {
@@ -282,6 +446,61 @@
         [
           {
             "node": "FinalizeSynth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FinalizeSkip": {
+      "main": [
+        [
+          {
+            "node": "SaveUserMsg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FinalizeSynth": {
+      "main": [
+        [
+          {
+            "node": "SaveUserMsg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SaveUserMsg": {
+      "main": [
+        [
+          {
+            "node": "PrepAssistantMsg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PrepAssistantMsg": {
+      "main": [
+        [
+          {
+            "node": "SaveAssistantMsg",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SaveAssistantMsg": {
+      "main": [
+        [
+          {
+            "node": "ComposeResponse",
             "type": "main",
             "index": 0
           }

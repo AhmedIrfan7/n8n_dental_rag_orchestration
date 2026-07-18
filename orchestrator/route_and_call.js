@@ -18,6 +18,7 @@ const cls = $('ClassifyIntent').first().json;
 const query = cls.query;
 const session_id = cls.session_id;
 const website_url = cls.website_url;
+const history = $('LoadHistory').first().json.history || []; // LoadHistory returns 1 row with a jsonb array field
 
 let intents = [];
 try { intents = (JSON.parse($input.first().json.choices[0].message.content).intents) || []; } catch (e) { intents = []; }
@@ -27,7 +28,7 @@ async function callAgent(name, path) {
   try {
     let res = await helpers.httpRequest({
       method: 'POST', url: BASE + path,
-      body: { query, website_url, session_id }, json: true, timeout: AGENT_TIMEOUT_MS,
+      body: { query, website_url, session_id, history }, json: true, timeout: AGENT_TIMEOUT_MS,
     });
     // Sub-agent webhooks respond with responseData:'allEntries', so the raw
     // body is a JSON array of items (n8n's dedicated HTTP Request node

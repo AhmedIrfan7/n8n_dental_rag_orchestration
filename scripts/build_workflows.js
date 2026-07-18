@@ -276,7 +276,11 @@ buildSubAgentWorkflow({
 
 // ---------------- 11_booking_agent ----------------
 const lookupClinicSql = read('db/queries/lookup_clinic.sql');
+const findOpenBookingSql = read('db/queries/find_open_booking.sql');
 const insertBookingSql = read('db/queries/insert_booking.sql');
+const updateBookingSql = read('db/queries/update_booking.sql');
+const prepBookingSession = read('booking/prep_session.js');
+const getOrCreateSessionSqlBk = read('db/queries/get_or_create_session.sql');
 const buildBookingReq = read('booking/build_extract_req.js');
 const parseSlots = read('booking/parse_slots.js');
 const formatBookingReply = read('booking/format_reply.js');
@@ -285,87 +289,128 @@ writeWf('11_booking_agent.json', {
   name: '11_booking_agent',
   nodes: [
     { parameters: { httpMethod: 'POST', path: 'agent/booking', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
-      id: 'c1100000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-400, 0], webhookId: 'c1100000-0000-0000-0000-000000000001' },
+      id: 'c1100000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-620, 0], webhookId: 'c1100000-0000-0000-0000-000000000001' },
     { parameters: { operation: 'executeQuery', query: lookupClinicSql, options: { queryReplacement: '={{ [$json.body.website_url] }}' } },
-      id: 'c1100000-0000-0000-0000-000000000002', name: 'LookupClinic', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-180, 0], credentials: PG_CRED },
+      id: 'c1100000-0000-0000-0000-000000000002', name: 'LookupClinic', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-400, 0], credentials: PG_CRED },
+    { parameters: { jsCode: prepBookingSession },
+      id: 'c1100000-0000-0000-0000-00000000000b', name: 'PrepBookingSession', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-400, 160] },
+    { parameters: { operation: 'executeQuery', query: getOrCreateSessionSqlBk, options: { queryReplacement: '={{ [$json.session_id] }}' } },
+      id: 'c1100000-0000-0000-0000-000000000010', name: 'EnsureSession', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-290, 160], credentials: PG_CRED },
+    { parameters: { operation: 'executeQuery', query: findOpenBookingSql, options: { queryReplacement: '={{ [$json.id] }}' } },
+      id: 'c1100000-0000-0000-0000-00000000000c', name: 'FindOpenBooking', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-180, 160], credentials: PG_CRED },
     { parameters: { jsCode: buildBookingReq },
-      id: 'c1100000-0000-0000-0000-000000000003', name: 'BuildBookingReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [40, 0] },
+      id: 'c1100000-0000-0000-0000-000000000003', name: 'BuildBookingReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [40, 80] },
     { parameters: {
         method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
         authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
         sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
         options: { timeout: 45000 },
       },
-      id: 'c1100000-0000-0000-0000-000000000004', name: 'OpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [260, 0],
+      id: 'c1100000-0000-0000-0000-000000000004', name: 'OpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [260, 80],
       retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
       credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
     { parameters: { jsCode: parseSlots },
-      id: 'c1100000-0000-0000-0000-000000000005', name: 'ParseSlots', type: 'n8n-nodes-base.code', typeVersion: 2, position: [480, 0] },
+      id: 'c1100000-0000-0000-0000-000000000005', name: 'ParseSlots', type: 'n8n-nodes-base.code', typeVersion: 2, position: [480, 80] },
+    { parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+        conditions: [{ id: 'c1', leftValue: '={{ $json.is_update }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }], combinator: 'and' } },
+      id: 'c1100000-0000-0000-0000-00000000000d', name: 'IsUpdate', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [700, 80] },
+    { parameters: { operation: 'executeQuery', query: updateBookingSql,
+        options: { queryReplacement: '={{ [$json.booking_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status] }}' } },
+      id: 'c1100000-0000-0000-0000-00000000000e', name: 'UpdateBooking', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [920, -20], credentials: PG_CRED },
     { parameters: { operation: 'executeQuery', query: insertBookingSql,
-        options: { queryReplacement: '={{ [$json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}' } },
-      id: 'c1100000-0000-0000-0000-000000000006', name: 'InsertBooking', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [700, 0], credentials: PG_CRED },
+        options: { queryReplacement: '={{ [$json.session_id, $json.clinic_id, $json.service_name, $json.preferred_date, $json.preferred_time, $json.patient_name, $json.patient_contact, $json.status, null] }}' } },
+      id: 'c1100000-0000-0000-0000-000000000006', name: 'InsertBooking', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [920, 180], credentials: PG_CRED },
     { parameters: { jsCode: formatBookingReply },
-      id: 'c1100000-0000-0000-0000-000000000007', name: 'FormatReply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [920, 0] },
+      id: 'c1100000-0000-0000-0000-000000000007', name: 'FormatReply', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1140, 80] },
   ],
   connections: {
-    Webhook: { main: [[{ node: 'LookupClinic', type: 'main', index: 0 }]] },
-    LookupClinic: { main: [[{ node: 'BuildBookingReq', type: 'main', index: 0 }]] },
+    Webhook: { main: [[{ node: 'LookupClinic', type: 'main', index: 0 }, { node: 'PrepBookingSession', type: 'main', index: 0 }]] },
+    PrepBookingSession: { main: [[{ node: 'EnsureSession', type: 'main', index: 0 }]] },
+    EnsureSession: { main: [[{ node: 'FindOpenBooking', type: 'main', index: 0 }]] },
+    FindOpenBooking: { main: [[{ node: 'BuildBookingReq', type: 'main', index: 0 }]] },
     BuildBookingReq: { main: [[{ node: 'OpenAI', type: 'main', index: 0 }]] },
     OpenAI: { main: [[{ node: 'ParseSlots', type: 'main', index: 0 }]] },
-    ParseSlots: { main: [[{ node: 'InsertBooking', type: 'main', index: 0 }]] },
+    ParseSlots: { main: [[{ node: 'IsUpdate', type: 'main', index: 0 }]] },
+    IsUpdate: { main: [[{ node: 'UpdateBooking', type: 'main', index: 0 }], [{ node: 'InsertBooking', type: 'main', index: 0 }]] },
+    UpdateBooking: { main: [[{ node: 'FormatReply', type: 'main', index: 0 }]] },
     InsertBooking: { main: [[{ node: 'FormatReply', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });
 
 // ---------------- 10_orchestrator ----------------
+const prepSession = read('orchestrator/prep_session.js');
+const getOrCreateSessionSql = read('db/queries/get_or_create_session.sql');
+const loadHistorySql = read('db/queries/load_history.sql');
+const saveMessageSql = read('db/queries/save_message.sql');
 const classifyIntent = read('orchestrator/classify_intent.js');
 const routeAndCall = read('orchestrator/route_and_call.js');
 const mergeResults = read('orchestrator/merge_results.js');
 const buildSynthesisReq = read('orchestrator/build_synthesis_req.js');
 const finalizeJs = read('orchestrator/finalize.js');
+const prepAssistantMsg = read('orchestrator/prep_assistant_msg.js');
+const composeResponse = read('orchestrator/compose_response.js');
 
 writeWf('10_orchestrator.json', {
   name: '10_orchestrator',
   nodes: [
     { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
-      id: 'a0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-600, 0], webhookId: 'a0000000-0000-0000-0000-000000000001' },
+      id: 'a0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-1080, 0], webhookId: 'a0000000-0000-0000-0000-000000000001' },
+    { parameters: { jsCode: prepSession },
+      id: 'a0000000-0000-0000-0000-00000000000b', name: 'PrepSession', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-860, 0] },
+    { parameters: { operation: 'executeQuery', query: getOrCreateSessionSql, options: { queryReplacement: '={{ [$json.session_id] }}' } },
+      id: 'a0000000-0000-0000-0000-00000000000c', name: 'GetOrCreateSession', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-640, 0], credentials: PG_CRED },
+    { parameters: { operation: 'executeQuery', query: loadHistorySql, options: { queryReplacement: '={{ [$json.id, 8] }}' } },
+      id: 'a0000000-0000-0000-0000-00000000000d', name: 'LoadHistory', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [-420, 0], credentials: PG_CRED },
     { parameters: { jsCode: classifyIntent },
-      id: 'a0000000-0000-0000-0000-000000000002', name: 'ClassifyIntent', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-380, 0] },
+      id: 'a0000000-0000-0000-0000-000000000002', name: 'ClassifyIntent', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-200, 0] },
     { parameters: {
         method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
         authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
         sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
         options: { timeout: 45000 },
       },
-      id: 'a0000000-0000-0000-0000-000000000003', name: 'ClassifyOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [-160, 0],
+      id: 'a0000000-0000-0000-0000-000000000003', name: 'ClassifyOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [20, 0],
       retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
       credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
     { parameters: { jsCode: routeAndCall },
-      id: 'a0000000-0000-0000-0000-000000000004', name: 'RouteAndCall', type: 'n8n-nodes-base.code', typeVersion: 2, position: [60, 0] },
+      id: 'a0000000-0000-0000-0000-000000000004', name: 'RouteAndCall', type: 'n8n-nodes-base.code', typeVersion: 2, position: [240, 0] },
     { parameters: { jsCode: mergeResults },
-      id: 'a0000000-0000-0000-0000-000000000005', name: 'MergeResults', type: 'n8n-nodes-base.code', typeVersion: 2, position: [280, 0] },
+      id: 'a0000000-0000-0000-0000-000000000005', name: 'MergeResults', type: 'n8n-nodes-base.code', typeVersion: 2, position: [460, 0] },
     { parameters: { jsCode: buildSynthesisReq },
-      id: 'a0000000-0000-0000-0000-000000000006', name: 'BuildSynthesisReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [500, 0] },
+      id: 'a0000000-0000-0000-0000-000000000006', name: 'BuildSynthesisReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [680, 0] },
     { parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
         conditions: [{ id: 'c1', leftValue: '={{ $json.skip_llm }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }], combinator: 'and' } },
-      id: 'a0000000-0000-0000-0000-000000000007', name: 'IsSkipLLM', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [720, 0] },
+      id: 'a0000000-0000-0000-0000-000000000007', name: 'IsSkipLLM', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [900, 0] },
     { parameters: { jsCode: finalizeJs },
-      id: 'a0000000-0000-0000-0000-000000000008', name: 'FinalizeSkip', type: 'n8n-nodes-base.code', typeVersion: 2, position: [940, 80] },
+      id: 'a0000000-0000-0000-0000-000000000008', name: 'FinalizeSkip', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1120, 80] },
     { parameters: {
         method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
         authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
         sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
         options: { timeout: 45000 },
       },
-      id: 'a0000000-0000-0000-0000-000000000009', name: 'SynthOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [940, -80],
+      id: 'a0000000-0000-0000-0000-000000000009', name: 'SynthOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1120, -80],
       retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
       credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
     { parameters: { jsCode: finalizeJs },
-      id: 'a0000000-0000-0000-0000-00000000000a', name: 'FinalizeSynth', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1160, -80] },
+      id: 'a0000000-0000-0000-0000-00000000000a', name: 'FinalizeSynth', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1340, -80] },
+    { parameters: { operation: 'executeQuery', query: saveMessageSql,
+        options: { queryReplacement: "={{ [$json.session_id, 'user', $json.query, null, null] }}" } },
+      id: 'a0000000-0000-0000-0000-00000000000e', name: 'SaveUserMsg', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [1560, 0], credentials: PG_CRED },
+    { parameters: { jsCode: prepAssistantMsg },
+      id: 'a0000000-0000-0000-0000-000000000011', name: 'PrepAssistantMsg', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1780, 0] },
+    { parameters: { operation: 'executeQuery', query: saveMessageSql,
+        options: { queryReplacement: "={{ [$json.session_id, 'assistant', $json.reply, JSON.stringify($json.intents || []), JSON.stringify($json.sources || [])] }}" } },
+      id: 'a0000000-0000-0000-0000-00000000000f', name: 'SaveAssistantMsg', type: 'n8n-nodes-base.postgres', typeVersion: 2.6, position: [2000, 0], credentials: PG_CRED },
+    { parameters: { jsCode: composeResponse },
+      id: 'a0000000-0000-0000-0000-000000000010', name: 'ComposeResponse', type: 'n8n-nodes-base.code', typeVersion: 2, position: [2220, 0] },
   ],
   connections: {
-    Webhook: { main: [[{ node: 'ClassifyIntent', type: 'main', index: 0 }]] },
+    Webhook: { main: [[{ node: 'PrepSession', type: 'main', index: 0 }]] },
+    PrepSession: { main: [[{ node: 'GetOrCreateSession', type: 'main', index: 0 }]] },
+    GetOrCreateSession: { main: [[{ node: 'LoadHistory', type: 'main', index: 0 }]] },
+    LoadHistory: { main: [[{ node: 'ClassifyIntent', type: 'main', index: 0 }]] },
     ClassifyIntent: { main: [[{ node: 'ClassifyOpenAI', type: 'main', index: 0 }]] },
     ClassifyOpenAI: { main: [[{ node: 'RouteAndCall', type: 'main', index: 0 }]] },
     RouteAndCall: { main: [[{ node: 'MergeResults', type: 'main', index: 0 }]] },
@@ -373,6 +418,11 @@ writeWf('10_orchestrator.json', {
     BuildSynthesisReq: { main: [[{ node: 'IsSkipLLM', type: 'main', index: 0 }]] },
     IsSkipLLM: { main: [[{ node: 'FinalizeSkip', type: 'main', index: 0 }], [{ node: 'SynthOpenAI', type: 'main', index: 0 }]] },
     SynthOpenAI: { main: [[{ node: 'FinalizeSynth', type: 'main', index: 0 }]] },
+    FinalizeSkip: { main: [[{ node: 'SaveUserMsg', type: 'main', index: 0 }]] },
+    FinalizeSynth: { main: [[{ node: 'SaveUserMsg', type: 'main', index: 0 }]] },
+    SaveUserMsg: { main: [[{ node: 'PrepAssistantMsg', type: 'main', index: 0 }]] },
+    PrepAssistantMsg: { main: [[{ node: 'SaveAssistantMsg', type: 'main', index: 0 }]] },
+    SaveAssistantMsg: { main: [[{ node: 'ComposeResponse', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });

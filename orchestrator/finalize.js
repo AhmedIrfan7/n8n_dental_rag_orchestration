@@ -14,6 +14,7 @@ if (d.skip_llm) {
 
 return [{
   json: {
+    query: merged.query,
     reply,
     session_id: d.session_id,
     intents: merged.intents,
