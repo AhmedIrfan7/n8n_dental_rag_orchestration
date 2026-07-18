@@ -9,10 +9,14 @@ cp .env.example .env
 # POSTGRES_PASSWORD can be anything for local dev.
 ./scripts/up.ps1                        # start the Docker stack
 ./scripts/healthcheck.ps1                # confirm n8n/Postgres/Qdrant/Redis/Ollama are all up
-# One-time: create the n8n owner account, a Postgres credential, and an
-# OpenAI credential inside n8n, then put their ids/values into .env as
-# N8N_PG_CRED_ID / N8N_OPENAI_CRED_ID / N8N_API_KEY (see docs/N8N_CONTROL.md
+# One-time: create the n8n owner account, a Postgres credential, an
+# OpenAI credential, and an httpHeaderAuth credential (name: X-Webhook-Key,
+# value: a random secret you generate) inside n8n, then put their ids/
+# values into .env as N8N_PG_CRED_ID / N8N_OPENAI_CRED_ID / N8N_API_KEY /
+# N8N_WEBHOOK_AUTH_CRED_ID / N8N_WEBHOOK_API_KEY (see docs/N8N_CONTROL.md
 # for the exact /rest calls - this only needs doing once per n8n volume).
+# Every webhook below requires that key as an X-Webhook-Key header - the
+# curl examples in this file include it via $env:N8N_WEBHOOK_API_KEY.
 docker compose -f infra/docker-compose.yml build voice-fallback
 docker compose -f infra/docker-compose.yml up -d voice-fallback
 node scripts/build_workflows.js          # assemble workflow JSON from source
@@ -32,7 +36,7 @@ Or just run `./scripts/bootstrap.ps1` to do the build+deploy steps in one go onc
 ## 2. Ingest a clinic
 ```powershell
 curl -X POST http://localhost:5679/webhook/ingest `
-  -H "Content-Type: application/json" `
+  -H "Content-Type: application/json" -H "X-Webhook-Key: $env:N8N_WEBHOOK_API_KEY" `
   -d '{"website_url":"https://www.deroodeortho.com/"}'
 ```
 One call does everything: crawl → extract → index. Takes roughly 1-3 minutes depending on site size and how many pages successfully fetch (the crawler tolerates a slow/partial-failing origin site — it extracts from whatever it got rather than failing the whole run). Point it at a *different* clinic's URL to prove genericity; nothing in the code is specific to deroodeortho.com.
@@ -40,7 +44,7 @@ One call does everything: crawl → extract → index. Takes roughly 1-3 minutes
 ## 3. Ask it something (text)
 ```powershell
 curl -X POST http://localhost:5679/webhook/ask `
-  -H "Content-Type: application/json" `
+  -H "Content-Type: application/json" -H "X-Webhook-Key: $env:N8N_WEBHOOK_API_KEY" `
   -d '{"query":"how much does invisalign cost","website_url":"https://www.deroodeortho.com/"}'
 ```
 Pass the `session_id` returned back in the next call to continue the same conversation (needed for multi-turn booking).
@@ -68,6 +72,7 @@ See `docs/DEMO.md` for sharing this live with a team over a tunnel.
 | `nslookup`/any Docker pull fails with "no such host" | DNS resolution is down at the OS level, not a Docker/app problem | Wait and retry; confirm with `nslookup registry-1.docker.io` directly |
 | Voice client shows "voice service unreachable" | `voice/fallback` container isn't running, or CORS isn't configured | `docker ps --filter name=dental-voice`; confirm `curl http://localhost:8000/health` |
 | STT mishears a brand name (e.g. "Invisalign" → "invisaline") | Whisper `base` isn't perfect on domain terms; this is a known, tested limitation | Usually harmless — the orchestrator's classifier tends to understand it anyway (verified in `docs/VOICE.md`) |
+| A webhook call returns 401/403 | Missing or wrong `X-Webhook-Key` header | Every `/webhook/*` endpoint requires it now (see `docs/N8N_CONTROL.md`) — check `.env`'s `N8N_WEBHOOK_API_KEY` matches what you're sending |
 
 ## 7. Tear down
 ```powershell

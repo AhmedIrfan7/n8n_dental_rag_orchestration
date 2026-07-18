@@ -21,11 +21,18 @@ const priorLine = open
     JSON.stringify({ service_name: open.service_name, preferred_date: open.preferred_date, preferred_time: open.preferred_time, patient_name: open.patient_name, patient_contact: open.patient_contact }) + '\n'
   : '';
 
+// The model extracts WHAT was said about the date, not a computed date -
+// relative-date arithmetic ("next Monday" -> an actual calendar date) is
+// done deterministically in parse_slots.js instead. An LLM doing that math
+// itself was verified to get it wrong (resolved "next Monday" a week off).
 const sys = [
   "Extract a dental/orthodontic appointment request from the patient's message.",
-  'Today\'s date is ' + today + ' (YYYY-MM-DD). Resolve relative dates ("next Monday", "tomorrow") against it; use null if you cannot resolve a date confidently.',
+  'Do NOT compute or resolve any date yourself. If the message states an explicit calendar date ' +
+    '("July 25th", "8/25", "the 25th"), put it in "explicit_date" as YYYY-MM-DD (today is ' + today + ', use it only to fill in an implied year/month, never to do weekday math). ' +
+    'If the message uses relative/day-of-week language ("next Monday", "tomorrow", "this Friday", "Monday"), ' +
+    'put the phrase VERBATIM (lowercase) in "relative_day_phrase" and leave "explicit_date" null - do not convert it to a date yourself.',
   priorLine + 'Return ONLY the NEW information found in the LATEST message below (leave a field null if this specific message does not mention it - prior values are merged in separately, do not repeat them).',
-  'JSON shape: { "service_name": string|null, "preferred_date": "YYYY-MM-DD"|null, "preferred_time": "HH:MM"|null (24h), "patient_name": string|null, "patient_contact": string|null }',
+  'JSON shape: { "service_name": string|null, "explicit_date": "YYYY-MM-DD"|null, "relative_day_phrase": string|null, "preferred_time": "HH:MM"|null (24h), "patient_name": string|null, "patient_contact": string|null }',
   'Do not invent values not implied by the message.',
 ].join('\n');
 

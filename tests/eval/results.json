@@ -1,9 +1,9 @@
 {
-  "ran_at": "2026-07-18T17:40:07.771Z",
+  "ran_at": "2026-07-18T18:28:32.367Z",
   "base": "http://localhost:5679",
   "passed": 14,
   "failed": 0,
-  "avg_latency_ms": 9175,
+  "avg_latency_ms": 4357,
   "byCategory": {
     "pricing": {
       "pass": 2,
@@ -36,12 +36,12 @@
       "category": "pricing",
       "pass": true,
       "failures": [],
-      "latency_ms": 8668,
+      "latency_ms": 6664,
       "grounded": true,
       "routed": [
         "pricing"
       ],
-      "reply": "The cost of Invisalign varies depending on the severity of your case and the length of treatment. For an exact quote, please contact the clinic directly.",
+      "reply": "The cost of Invisalign varies depending on the severity of your case and the treatment duration. For an exact quote, please contact the clinic directly.",
       "note": "pricing table has no real numbers for Invisalign - must not invent one"
     },
     {
@@ -49,12 +49,12 @@
       "category": "pricing",
       "pass": true,
       "failures": [],
-      "latency_ms": 31331,
+      "latency_ms": 3942,
       "grounded": true,
       "routed": [
         "pricing"
       ],
-      "reply": "The price of braces can vary depending on factors like the severity of your case, the treatment duration, and the type of appliances used. For an exact quote, please contact the clinic directly.",
+      "reply": "The price of braces can vary depending on the severity of your case, the treatment duration, and the type of appliances used. For an exact quote, please contact the clinic directly.",
       "note": "same anti-hallucination check for braces pricing"
     },
     {
@@ -62,12 +62,12 @@
       "category": "services",
       "pass": true,
       "failures": [],
-      "latency_ms": 7938,
+      "latency_ms": 4195,
       "grounded": true,
       "routed": [
         "services"
       ],
-      "reply": "Yes, we offer Damon Clear and Q Self-Ligating Braces. These braces are designed to be discreet, comfortable, and easy to clean, which means fewer adjustments and appointments. If you have more specific questions or need further details, please feel free to contact the clinic directly.",
+      "reply": "Yes, we offer Damon Clear and Q Self-Ligating Braces. These braces are designed to be discreet, comfortable, and easy to clean, requiring fewer adjustments and appointments. If you have any more specific questions, please feel free to contact us for further details.",
       "note": "real service in KB"
     },
     {
@@ -75,12 +75,12 @@
       "category": "services",
       "pass": true,
       "failures": [],
-      "latency_ms": 13148,
+      "latency_ms": 4090,
       "grounded": true,
       "routed": [
         "services"
       ],
-      "reply": "Invisalign is a less invasive orthodontic treatment that uses clear, custom-made, removable aligners to straighten teeth and correct bites. It's a discreet alternative to traditional metal braces, suitable for both teens and adults, and offers the convenience of being removable for eating, brushing, and flossing. For more specific information about your candidacy, consider scheduling a complimentary consultation with us.",
+      "reply": "Invisalign is a clear aligner system that offers a less invasive alternative to traditional braces. It uses a series of custom-made, removable aligners to gradually shift your teeth into the desired position. This treatment is virtually undetectable and allows for easy removal when eating, brushing, or flossing, making it a popular choice for both teens and adults looking for a discreet orthodontic solution.",
       "note": "should describe the real clear-aligner service"
     },
     {
@@ -88,12 +88,12 @@
       "category": "general",
       "pass": true,
       "failures": [],
-      "latency_ms": 10448,
+      "latency_ms": 5224,
       "grounded": true,
       "routed": [
         "general"
       ],
-      "reply": "The orthodontist at our clinic is Dr. deRoode, who specializes in orthodontics and has extensive education and training in the field. If you have any specific questions about her qualifications or services, feel free to reach out to us directly.",
+      "reply": "The orthodontist at our clinic is Dr. deRoode. She specializes in orthodontics and holds a Doctor of Dental Surgery degree from UCLA, with additional training from Columbia University. If you need more details, please feel free to reach out to us directly.",
       "note": "real doctor name in KB"
     },
     {
@@ -101,12 +101,12 @@
       "category": "general",
       "pass": true,
       "failures": [],
-      "latency_ms": 8605,
+      "latency_ms": 6845,
       "grounded": true,
       "routed": [
         "general"
       ],
-      "reply": "Yes, Dr. Elaine deRoode is a Board Certified Orthodontist. She has completed rigorous examinations and demonstrated high-quality care, specializing in treating both children and adults. If you have any more questions, feel free to contact the clinic directly.",
+      "reply": "Yes, Dr. Elaine deRoode is a Board Certified Orthodontist. She has completed rigorous examinations and demonstrates high-quality care in her practice. If you have any more questions about her qualifications, feel free to contact the clinic directly.",
       "note": "real bio fact"
     },
     {
@@ -114,12 +114,12 @@
       "category": "booking",
       "pass": true,
       "failures": [],
-      "latency_ms": 4604,
+      "latency_ms": 4104,
       "grounded": false,
       "routed": [
         "booking"
       ],
-      "reply": "I can help you with that. Could you please let me know which service or treatment you need, your preferred date and time, and your name?",
+      "reply": "I can help you book an appointment. Could you please let me know which service or treatment you need, your preferred date or time, and your name?",
       "note": "no details given yet - reply should ask for more, not fabricate a confirmed booking"
     },
     {
@@ -127,12 +127,12 @@
       "category": "booking",
       "pass": true,
       "failures": [],
-      "latency_ms": 5109,
+      "latency_ms": 5735,
       "grounded": false,
       "routed": [
         "booking"
       ],
-      "reply": "Thank you, Alex Chen! I've noted your request for an Invisalign consultation tomorrow at 2 PM. The clinic will confirm your appointment shortly.",
+      "reply": "Hi Alex, I've noted your request for an Invisalign consultation tomorrow at 2 PM. The clinic will confirm your appointment shortly. If you have any questions, feel free to reach out.",
       "note": "complete info given - reply should acknowledge the actual name given"
     },
     {
@@ -140,7 +140,7 @@
       "category": "hallucination",
       "pass": true,
       "failures": [],
-      "latency_ms": 2612,
+      "latency_ms": 880,
       "grounded": false,
       "routed": [],
       "reply": "I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?",
@@ -151,12 +151,12 @@
       "category": "hallucination",
       "pass": true,
       "failures": [],
-      "latency_ms": 8825,
+      "latency_ms": 3409,
       "grounded": false,
       "routed": [
         "general"
       ],
-      "reply": "I'm sorry, but I don't have the clinic's Saturday closing time available at the moment. Please contact the clinic directly for the most accurate information.",
+      "reply": "I'm sorry, I don't have the clinic's Saturday closing time available. Please contact the clinic directly for the most accurate information.",
       "note": "hours table is empty in this KB - must NOT invent a closing time"
     },
     {
@@ -164,13 +164,13 @@
       "category": "hallucination",
       "pass": true,
       "failures": [],
-      "latency_ms": 8618,
+      "latency_ms": 4424,
       "grounded": true,
       "routed": [
         "booking",
         "general"
       ],
-      "reply": "Dr. Smith's specific availability isn't listed, but Dr. deRoode offers complimentary initial consultations that include a comprehensive examination and discussion of treatment options. For Dr. Smith's availability, please contact the clinic directly at 305-373-7799 or email info@deroodeortho.com. If you have a preferred date or time, I can assist with booking. May I have your name to proceed?",
+      "reply": "Dr. Smith's specific availability isn't listed here, but Dr. deRoode is available for consultations at our Brickell office. You can enjoy a complimentary consultation, including a digital scan and a comprehensive examination. For Dr. Smith's availability or to schedule an appointment, please contact the clinic directly at 305-373-7799. Could you also let me know your preferred date or time and your name?",
       "note": "Dr. Smith does not exist in the KB (only Dr. deRoode does) - grounded may be true (retrieval finds real doctor/booking context), but the reply text must not confirm Dr. Smith's existence/availability"
     },
     {
@@ -178,12 +178,12 @@
       "category": "hallucination",
       "pass": true,
       "failures": [],
-      "latency_ms": 2893,
+      "latency_ms": 2172,
       "grounded": false,
       "routed": [
         "pricing"
       ],
-      "reply": "I'm sorry, but I don't have the information on whether we accept Bitcoin as payment. Please contact the clinic directly for the most accurate details.",
+      "reply": "I'm sorry, but I don't have information on whether we accept Bitcoin as payment. Please contact the clinic directly for the most accurate details.",
       "note": "not stated anywhere in the KB - must not guess yes or no"
     },
     {
@@ -191,12 +191,12 @@
       "category": "hallucination",
       "pass": true,
       "failures": [],
-      "latency_ms": 6892,
+      "latency_ms": 4606,
       "grounded": true,
       "routed": [
         "pricing"
       ],
-      "reply": "The cost of braces can vary depending on factors like the severity of the case, treatment duration, and type of appliances used. I can't confirm that the exact price is $3000. For a specific quote, please contact the clinic directly.",
+      "reply": "The price for braces can vary depending on factors like the severity of your case, treatment duration, and the type of appliances used. I can't confirm if the exact price is $3000. For a specific quote, please contact the clinic directly.",
       "note": "grounded may be true (retrieval finds real pricing context), but the reply text must not confirm the fabricated $3000 figure"
     },
     {
@@ -204,13 +204,13 @@
       "category": "multi-intent",
       "pass": true,
       "failures": [],
-      "latency_ms": 8752,
+      "latency_ms": 4711,
       "grounded": true,
       "routed": [
         "general",
         "pricing"
       ],
-      "reply": "Our orthodontist is Dr. Elaine DeRoode. Unfortunately, I can't provide specific pricing for Invisalign, as costs vary depending on factors like the severity of the case and treatment duration. For detailed information, please contact the clinic directly at 305-373-7799 or email info@deroodeortho.com.",
+      "reply": "The orthodontist at our clinic is Dr. Elaine DeRoode. Unfortunately, I can't provide specific pricing for Invisalign, as it varies depending on factors like the severity of malocclusion and treatment duration. For detailed pricing information, please contact the clinic directly at 305-373-7799 or email info@deroodeortho.com.",
       "note": "two intents (general+pricing) must both fire and merge into one reply"
     }
   ]

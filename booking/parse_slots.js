@@ -11,10 +11,36 @@ const open = (openRows.length && openRows[0].id != null) ? openRows[0] : null;
 let slots = {};
 try { slots = JSON.parse($input.first().json.choices[0].message.content); } catch (e) { slots = {}; }
 
+// Resolve relative-date phrases ("next Monday", "tomorrow") ourselves with
+// real Date arithmetic rather than trusting the LLM's math - verified the
+// LLM alone gets this wrong (resolved "next Monday" a week off). The model
+// only extracts the phrase (build_extract_req.js); this does the computing.
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+function resolveRelativeDate(phrase, todayStr) {
+  if (!phrase) return null;
+  const p = String(phrase).toLowerCase();
+  const today = new Date(todayStr + 'T00:00:00Z');
+  const fmt = function (d) { return d.toISOString().slice(0, 10); };
+  const addDays = function (d, n) { const r = new Date(d.getTime()); r.setUTCDate(r.getUTCDate() + n); return r; };
+
+  if (/\btoday\b/.test(p)) return fmt(today);
+  if (/\btomorrow\b/.test(p)) return fmt(addDays(today, 1));
+
+  const dayIdx = WEEKDAYS.findIndex(function (w) { return p.indexOf(w) !== -1; });
+  if (dayIdx === -1) return null; // an unrecognized phrase - leave null rather than guess
+
+  const todayIdx = today.getUTCDay();
+  let diff = (dayIdx - todayIdx + 7) % 7; // 0 = today, 1-6 = the closest upcoming occurrence
+  if (diff === 0 && !/\bthis\b/.test(p)) diff = 7; // "monday"/"next monday" said ON a monday means next week's, unless "this monday"
+  return fmt(addDays(today, diff));
+}
+const today = new Date().toISOString().slice(0, 10);
+const resolvedDate = slots.explicit_date || resolveRelativeDate(slots.relative_day_phrase, today);
+
 // New values win when present this turn; otherwise carry forward the
 // already-collected ones from the open booking (if any).
 const service_name = slots.service_name || (open && open.service_name) || null;
-const preferred_date = slots.preferred_date || (open && open.preferred_date) || null;
+const preferred_date = resolvedDate || (open && open.preferred_date) || null;
 const preferred_time = slots.preferred_time || (open && open.preferred_time) || null;
 const patient_name = slots.patient_name || (open && open.patient_name) || null;
 const patient_contact = slots.patient_contact || (open && open.patient_contact) || null;

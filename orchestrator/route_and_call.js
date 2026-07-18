@@ -24,10 +24,19 @@ let intents = [];
 try { intents = (JSON.parse($input.first().json.choices[0].message.content).intents) || []; } catch (e) { intents = []; }
 const routed = intents.filter(function (i) { return i && AGENT_PATHS[i.name] && i.confidence >= CONFIDENCE_THRESHOLD; });
 
+// Every sub-agent webhook now requires this header (see docs/N8N_CONTROL.md
+// and scripts/n8n_deploy.ps1). A dedicated HTTP Request node gets this from
+// a credential automatically; a Code node's manual helpers.httpRequest()
+// does not, so the literal placeholder below is substituted with the real
+// secret at deploy time - never committed with a real value (same pattern
+// as __PG_CRED_ID__/__OPENAI_CRED_ID__ elsewhere in this codebase).
+const WEBHOOK_KEY = '__WEBHOOK_API_KEY__';
+
 async function callAgent(name, path) {
   try {
     let res = await helpers.httpRequest({
       method: 'POST', url: BASE + path,
+      headers: { 'X-Webhook-Key': WEBHOOK_KEY },
       body: { query, website_url, session_id, history }, json: true, timeout: AGENT_TIMEOUT_MS,
     });
     // Sub-agent webhooks respond with responseData:'allEntries', so the raw
