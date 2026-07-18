@@ -1,12 +1,7 @@
 # Deploy an n8n workflow JSON (from workflows/) into the running instance,
 # idempotently (upsert by workflow name), then optionally activate it.
 # Placeholders in the JSON are substituted from .env before deploy:
-#   __PG_CRED_ID__            -> N8N_PG_CRED_ID
-#   __OPENAI_CRED_ID__        -> N8N_OPENAI_CRED_ID
-#   __WEBHOOK_AUTH_CRED_ID__  -> N8N_WEBHOOK_AUTH_CRED_ID (httpHeaderAuth credential, used by Webhook trigger nodes)
-#   __WEBHOOK_API_KEY__       -> N8N_WEBHOOK_API_KEY (raw secret; only needed by Code nodes that call another
-#                                webhook manually via helpers.httpRequest, since credential injection only
-#                                applies to dedicated nodes - see orchestrator/route_and_call.js)
+#   __PG_CRED_ID__  -> N8N_PG_CRED_ID
 # Usage:
 #   ./scripts/n8n_deploy.ps1 -File workflows/01_ingestion_pipeline.json -Activate
 param(
@@ -35,8 +30,6 @@ Invoke-WebRequest "$base/rest/login" -Method Post -Body (@{emailOrLdapLoginId=$e
 $raw = Get-Content $File -Raw
 $raw = $raw.Replace('__PG_CRED_ID__', $envMap['N8N_PG_CRED_ID'])
 $raw = $raw.Replace('__OPENAI_CRED_ID__', $envMap['N8N_OPENAI_CRED_ID'])
-$raw = $raw.Replace('__WEBHOOK_AUTH_CRED_ID__', $envMap['N8N_WEBHOOK_AUTH_CRED_ID'])
-$raw = $raw.Replace('__WEBHOOK_API_KEY__', $envMap['N8N_WEBHOOK_API_KEY'])
 $wf  = $raw | ConvertFrom-Json
 $name = $wf.name
 $payload = $raw

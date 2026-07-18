@@ -7,14 +7,7 @@
         "path": "voice/ask",
         "responseMode": "lastNode",
         "responseData": "firstEntryBinary",
-        "options": {},
-        "authentication": "headerAuth"
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "__WEBHOOK_AUTH_CRED_ID__",
-          "name": "Webhook Auth"
-        }
+        "options": {}
       },
       "id": "d0000000-0000-0000-0000-000000000001",
       "name": "Webhook",
@@ -76,14 +69,6 @@
         "jsonBody": "={{ JSON.stringify($json) }}",
         "options": {
           "timeout": 90000
-        },
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "httpHeaderAuth"
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "__WEBHOOK_AUTH_CRED_ID__",
-          "name": "Webhook Auth"
         }
       },
       "id": "d0000000-0000-0000-0000-000000000004",

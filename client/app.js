@@ -8,17 +8,9 @@
 // tunnel, the shared link carries ?voice=<tunnel>&n8n=<tunnel> so a remote
 // device's "localhost" (which would otherwise mean ITS OWN machine) is
 // overridden with the actual reachable tunnel URLs.
-//
-// ?key=... carries the shared webhook secret (see docs/N8N_CONTROL.md) -
-// every /webhook/* call now requires the X-Webhook-Key header. This is a
-// browser page, so the key is visible to whoever has the link regardless of
-// how it's passed (query param or otherwise) - it stops casual/automated
-// abuse of a found URL, not a determined person actively using the shared
-// link. scripts/start_demo.ps1 prints the full URL with this included.
 const params = new URLSearchParams(location.search);
 const VOICE_BASE = params.get('voice') || 'http://localhost:8000';
 const N8N_BASE = params.get('n8n') || 'http://localhost:5679';
-const WEBHOOK_KEY = params.get('key') || '';
 const BAR_COUNT = 28;
 
 const el = {
@@ -247,7 +239,7 @@ async function runPipeline(audioBlob) {
 
     const askRes = await fetch(N8N_BASE + '/webhook/ask', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Webhook-Key': WEBHOOK_KEY },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         query,
         session_id: sessionId,

@@ -7,14 +7,7 @@
         "path": "index",
         "responseMode": "lastNode",
         "responseData": "allEntries",
-        "options": {},
-        "authentication": "headerAuth"
-      },
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "__WEBHOOK_AUTH_CRED_ID__",
-          "name": "Webhook Auth"
-        }
+        "options": {}
       },
       "id": "b3000000-0000-0000-0000-000000000001",
       "name": "Webhook",
