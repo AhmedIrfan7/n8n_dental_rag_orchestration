@@ -61,6 +61,9 @@ const el = {
   switchClinicBtn: document.getElementById('switchClinicBtn'),
   player: document.getElementById('player'),
   replayBtn: document.getElementById('replayBtn'),
+  textForm: document.getElementById('textForm'),
+  textInput: document.getElementById('textInput'),
+  textSend: document.getElementById('textSend'),
 };
 
 let sessionId = null;
@@ -152,10 +155,15 @@ function setState(state, label, word) {
   el.stateLabel.textContent = label;
   el.stateWord.textContent = word;
 }
+function setControlsBusy(busy) {
+  el.micBtn.disabled = busy;
+  el.textInput.disabled = busy;
+  el.textSend.disabled = busy;
+}
 function setIdle(hint) {
   stopArcAnimation();
   setState('idle', 'Ready', 'to listen');
-  el.micBtn.disabled = false;
+  setControlsBusy(false);
   el.micBtn.dataset.recording = 'false';
   el.micBtnLabel.textContent = 'Start talking';
   if (hint) el.hint.textContent = hint;
@@ -164,7 +172,7 @@ function setError(message) {
   stopArcAnimation();
   setState('error', 'Something went wrong', 'try again');
   el.hint.textContent = message;
-  el.micBtn.disabled = false;
+  setControlsBusy(false);
   el.micBtn.dataset.recording = 'false';
   el.micBtnLabel.textContent = 'Start talking';
 }
@@ -198,6 +206,7 @@ function resetConversation() {
   sessionId = null;
   updateSessionDisplay();
   hideReplay();
+  el.textInput.value = '';
   el.transcript.innerHTML = '';
   const empty = document.createElement('p');
   empty.className = 'transcript-empty';
@@ -397,7 +406,7 @@ function stopRecording() {
 }
 
 async function handleRecordingStopped() {
-  el.micBtn.disabled = true;
+  setControlsBusy(true);
   setState('thinking', 'One moment', 'thinking…');
   el.hint.textContent = 'Transcribing your question…';
   animateThinking();
@@ -406,30 +415,22 @@ async function handleRecordingStopped() {
   await runPipeline(blob);
 }
 
-// ---------- the actual pipeline (also used for programmatic testing) ----------
-async function runPipeline(audioBlob) {
-  hideReplay();
-  let query, reply;
+// ---------- shared tail: ask the assistant, then speak the reply ----------
+// Used by both the voice pipeline (after transcribing) and typed input
+// (directly). A failure asking the assistant means there's genuinely no
+// answer yet, so the "isn't responding" message is accurate there. A
+// failure only in speaking it back must NOT overwrite an already-correct,
+// already-displayed text reply with that same message - see speakAndPlay's
+// caller below for why (TTS error, or a browser blocking programmatic
+// audio playback because it's several awaits removed from the click that
+// started this).
+async function askAndSpeak(query) {
+  addTurn('you', query);
+  setState('thinking', 'One moment', 'thinking…');
+  el.hint.textContent = 'Checking with the clinic assistant…';
 
-  // Stage 1+2: transcribe, then ask the assistant. A failure here means we
-  // genuinely have no answer yet, so the "assistant isn't responding"
-  // message is accurate.
+  let reply;
   try {
-    const form = new FormData();
-    form.append('file', audioBlob, 'question.webm');
-    const transcribeRes = await fetch(VOICE_BASE + '/transcribe', { method: 'POST', body: form });
-    if (!transcribeRes.ok) throw new Error('transcribe_failed');
-    const transcribed = await transcribeRes.json();
-    query = transcribed.text;
-    if (!query || !query.trim()) {
-      setError("We couldn't make out what you said. Try speaking a little closer to the mic.");
-      return;
-    }
-    addTurn('you', query);
-
-    setState('thinking', 'One moment', 'thinking…');
-    el.hint.textContent = 'Checking with the clinic assistant…';
-
     const askRes = await fetch(N8N_BASE + '/webhook/ask', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Webhook-Key': WEBHOOK_KEY },
@@ -452,12 +453,6 @@ async function runPipeline(audioBlob) {
     return;
   }
 
-  // Stage 3: speak the reply out loud. The text answer above is already
-  // correct and visible - a failure here (TTS error, or a browser blocking
-  // programmatic audio playback because it's several awaits removed from
-  // the click that started this) should never overwrite that with a
-  // misleading "not responding" message. Fall back to a manual play button
-  // instead, which is a real user gesture and always allowed to play.
   try {
     await speakAndPlay(reply);
   } catch (e) {
@@ -465,13 +460,48 @@ async function runPipeline(audioBlob) {
     stopArcAnimation();
     setState('idle', 'Answer ready', 'tap to hear it');
     el.hint.textContent = "Here's the answer above. Playback didn't start automatically - tap below to hear it.";
-    el.micBtn.disabled = false;
+    setControlsBusy(false);
     el.micBtn.dataset.recording = 'false';
     el.micBtnLabel.textContent = 'Start talking';
     el.replayBtn.hidden = false;
     el.replayBtn.onclick = () => speakAndPlay(reply).catch((err) => console.error(err));
   }
 }
+
+// ---------- voice pipeline (also used for programmatic testing) ----------
+async function runPipeline(audioBlob) {
+  hideReplay();
+  let query;
+  try {
+    const form = new FormData();
+    form.append('file', audioBlob, 'question.webm');
+    const transcribeRes = await fetch(VOICE_BASE + '/transcribe', { method: 'POST', body: form });
+    if (!transcribeRes.ok) throw new Error('transcribe_failed');
+    const transcribed = await transcribeRes.json();
+    query = transcribed.text;
+    if (!query || !query.trim()) {
+      setError("We couldn't make out what you said. Try speaking a little closer to the mic.");
+      return;
+    }
+  } catch (e) {
+    console.error(e);
+    setError("The clinic assistant isn't responding right now. Try again in a moment.");
+    return;
+  }
+  await askAndSpeak(query);
+}
+
+// ---------- typed input ----------
+el.textForm.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const query = el.textInput.value.trim();
+  if (!query) return;
+  hideReplay();
+  el.textInput.value = '';
+  setControlsBusy(true);
+  animateThinking();
+  await askAndSpeak(query);
+});
 
 // A media element can only ever be wired into ONE MediaElementSourceNode for
 // its whole lifetime (a second createMediaElementSource() call throws) - so
