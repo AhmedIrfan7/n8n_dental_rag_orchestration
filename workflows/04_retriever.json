@@ -1,0 +1,52 @@
+{
+  "name": "04_retriever",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "retrieve",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "b4000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "b4000000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Retrieval — n8n Code node (Run Once for All Items).\n// Input : webhook body { query, website_url, type?, top_k?, min_score? }\n// Output: ONE item { query, grounded, top_score, matches:[{score,type,section,url,text}] }\n// Grounding guard: if the best match scores below min_score, flag grounded=false\n// so callers (sub-agents/synthesizer) know to fall back rather than invent an answer.\nconst helpers = this.helpers;\nconst OLLAMA = 'http://dental-ollama:11434';\nconst QDRANT = 'http://dental-qdrant:6333';\nconst COLL = 'clinic_kb';\nconst MODEL = 'nomic-embed-text';\n\nconst body = $input.first().json.body || $input.first().json || {};\nconst query = String(body.query || '').trim();\nconst website_url = body.website_url || null;\nconst topK = parseInt(body.top_k || 6, 10);\nconst minScore = typeof body.min_score === 'number' ? body.min_score : 0.55;\nif (!query) throw new Error('query is required');\n\nconst e = await helpers.httpRequest({\n  method: 'POST', url: OLLAMA + '/api/embeddings',\n  body: { model: MODEL, prompt: query }, json: true, timeout: 30000,\n});\nconst vector = e.embedding;\n\nconst must = [];\nif (website_url) must.push({ key: 'website_url', match: { value: website_url } });\nif (body.type) must.push({ key: 'type', match: { value: body.type } });\n\nconst searchBody = { vector, limit: topK, with_payload: true };\nif (must.length) searchBody.filter = { must };\n\nconst r = await helpers.httpRequest({\n  method: 'POST', url: QDRANT + '/collections/' + COLL + '/points/search',\n  body: searchBody, json: true, timeout: 30000,\n});\n\nconst seen = new Set();\nconst matches = [];\nfor (const hit of (r.result || [])) {\n  const key = (hit.payload.ext_id || '') + ':' + (hit.payload.chunk_index || 0);\n  if (seen.has(key)) continue;\n  seen.add(key);\n  matches.push({\n    score: hit.score,\n    type: hit.payload.type,\n    section: hit.payload.section,\n    url: hit.payload.url,\n    text: hit.payload.text,\n  });\n}\n\nconst top_score = matches.length ? matches[0].score : 0;\nreturn [{\n  json: {\n    query,\n    grounded: top_score >= minScore,\n    top_score,\n    matches,\n  },\n}];\n"
+      },
+      "id": "b4000000-0000-0000-0000-000000000002",
+      "name": "Retrieve",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Retrieve",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

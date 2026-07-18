@@ -172,3 +172,20 @@ writeWf('03_build_index.json', {
   },
   settings: { executionOrder: 'v1' },
 });
+
+// ---------------- 04_retriever ----------------
+const retrieveJs = read('rag/retrieve.js');
+
+writeWf('04_retriever.json', {
+  name: '04_retriever',
+  nodes: [
+    { parameters: { httpMethod: 'POST', path: 'retrieve', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      id: 'b4000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [0, 0], webhookId: 'b4000000-0000-0000-0000-000000000001' },
+    { parameters: { jsCode: retrieveJs },
+      id: 'b4000000-0000-0000-0000-000000000002', name: 'Retrieve', type: 'n8n-nodes-base.code', typeVersion: 2, position: [220, 0] },
+  ],
+  connections: {
+    Webhook: { main: [[{ node: 'Retrieve', type: 'main', index: 0 }]] },
+  },
+  settings: { executionOrder: 'v1' },
+});
