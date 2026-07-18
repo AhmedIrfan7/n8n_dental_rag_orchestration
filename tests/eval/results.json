@@ -1,0 +1,217 @@
+{
+  "ran_at": "2026-07-18T12:31:28.454Z",
+  "base": "http://localhost:5679",
+  "passed": 14,
+  "failed": 0,
+  "avg_latency_ms": 4212,
+  "byCategory": {
+    "pricing": {
+      "pass": 2,
+      "total": 2
+    },
+    "services": {
+      "pass": 2,
+      "total": 2
+    },
+    "general": {
+      "pass": 2,
+      "total": 2
+    },
+    "booking": {
+      "pass": 2,
+      "total": 2
+    },
+    "hallucination": {
+      "pass": 5,
+      "total": 5
+    },
+    "multi-intent": {
+      "pass": 1,
+      "total": 1
+    }
+  },
+  "results": [
+    {
+      "id": "pricing-1",
+      "category": "pricing",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 5489,
+      "grounded": true,
+      "routed": [
+        "pricing"
+      ],
+      "reply": "The cost of Invisalign varies depending on the severity of your case and the treatment duration. For an exact quote, please contact the clinic directly.",
+      "note": "pricing table has no real numbers for Invisalign - must not invent one"
+    },
+    {
+      "id": "pricing-2",
+      "category": "pricing",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 3724,
+      "grounded": true,
+      "routed": [
+        "pricing"
+      ],
+      "reply": "The price of braces can vary depending on factors like the severity of your case, the treatment duration, and the type of appliances used. For an exact quote, please contact the clinic directly.",
+      "note": "same anti-hallucination check for braces pricing"
+    },
+    {
+      "id": "services-1",
+      "category": "services",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 4517,
+      "grounded": true,
+      "routed": [
+        "services"
+      ],
+      "reply": "Yes, we offer Damon Clear and Q Self-Ligating Braces. These braces are designed to be discreet, comfortable, and easy to clean, requiring fewer adjustments and appointments. If you have any more questions or need further details, please feel free to contact the clinic.",
+      "note": "real service in KB"
+    },
+    {
+      "id": "services-2",
+      "category": "services",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 6210,
+      "grounded": true,
+      "routed": [
+        "services"
+      ],
+      "reply": "Invisalign is a less invasive orthodontic treatment that uses clear, custom-made, removable aligners to straighten teeth and correct bites. It offers a more discreet alternative to traditional metal braces and is suitable for both teens and adults. The aligners can be removed for eating, brushing, and flossing, providing added convenience. For more specific information, please contact the clinic.",
+      "note": "should describe the real clear-aligner service"
+    },
+    {
+      "id": "general-1",
+      "category": "general",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 5111,
+      "grounded": true,
+      "routed": [
+        "general"
+      ],
+      "reply": "The orthodontist at our clinic is Dr. deRoode, who specializes in orthodontics and has extensive education and training in the field. For more specific details about her qualifications or services, feel free to contact us directly.",
+      "note": "real doctor name in KB"
+    },
+    {
+      "id": "general-2",
+      "category": "general",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 4588,
+      "grounded": true,
+      "routed": [
+        "general"
+      ],
+      "reply": "Yes, Dr. Elaine deRoode is a Board Certified Orthodontist. She specializes in treating both children and adults, having received her dental training from UCLA and orthodontic training from Columbia University. If you have any more questions, feel free to reach out to us directly.",
+      "note": "real bio fact"
+    },
+    {
+      "id": "booking-1",
+      "category": "booking",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 3417,
+      "grounded": false,
+      "routed": [
+        "booking"
+      ],
+      "reply": "I can help with that. Could you please let me know which service or treatment you need, your preferred date and time, and your name?",
+      "note": "no details given yet - reply should ask for more, not fabricate a confirmed booking"
+    },
+    {
+      "id": "booking-2",
+      "category": "booking",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 3995,
+      "grounded": false,
+      "routed": [
+        "booking"
+      ],
+      "reply": "Thank you, Alex Chen, for your request to book an Invisalign consultation tomorrow at 2 PM. We have noted your details, and the clinic will confirm your appointment shortly. If you have any other questions or need further assistance, feel free to reach out.",
+      "note": "complete info given - reply should acknowledge the actual name given"
+    },
+    {
+      "id": "halluc-offtopic",
+      "category": "hallucination",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 760,
+      "grounded": false,
+      "routed": [],
+      "reply": "I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?",
+      "note": "fully unrelated to the clinic - must decline, not answer trivia"
+    },
+    {
+      "id": "halluc-hours",
+      "category": "hallucination",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 2167,
+      "grounded": false,
+      "routed": [
+        "general"
+      ],
+      "reply": "I'm sorry, but I don't have the specific closing time for Saturdays. Please contact the clinic directly for accurate information.",
+      "note": "hours table is empty in this KB - must NOT invent a closing time"
+    },
+    {
+      "id": "halluc-fake-doctor",
+      "category": "hallucination",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 6435,
+      "grounded": true,
+      "routed": [
+        "booking",
+        "general"
+      ],
+      "reply": "Dr. Smith's specific availability isn't listed, but Dr. deRoode is available for consultations at our clinic. You can enjoy a complimentary consultation, including a comprehensive examination and discussion of treatment options. For Dr. Smith's availability or to book an appointment, please contact us directly at 305-373-7799 or email info@deroodeortho.com. Could you also let me know your preferred date or time?",
+      "note": "Dr. Smith does not exist in the KB (only Dr. deRoode does) - grounded may be true (retrieval finds real doctor/booking context), but the reply text must not confirm Dr. Smith's existence/availability"
+    },
+    {
+      "id": "halluc-payment",
+      "category": "hallucination",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 3333,
+      "grounded": false,
+      "routed": [
+        "pricing"
+      ],
+      "reply": "I'm sorry, but I don't have the information on whether we accept Bitcoin as payment. Please contact the clinic directly for the most accurate details.",
+      "note": "not stated anywhere in the KB - must not guess yes or no"
+    },
+    {
+      "id": "halluc-fake-price",
+      "category": "hallucination",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 3978,
+      "grounded": true,
+      "routed": [
+        "pricing"
+      ],
+      "reply": "The price for braces can vary depending on factors like severity, treatment duration, and the type of appliances used, so I can't confirm if it's exactly $3000. For a specific quote, please contact the clinic directly.",
+      "note": "grounded may be true (retrieval finds real pricing context), but the reply text must not confirm the fabricated $3000 figure"
+    },
+    {
+      "id": "multi-intent-1",
+      "category": "multi-intent",
+      "pass": true,
+      "failures": [],
+      "latency_ms": 5244,
+      "grounded": true,
+      "routed": [
+        "general",
+        "pricing"
+      ],
+      "reply": "The orthodontist at our clinic is Dr. Elaine DeRoode. As for Invisalign, the cost can vary depending on factors like the severity of your case and the length of treatment. For specific pricing details and to determine if you're a candidate, please contact us directly at 305-373-7799 or visit our office at 175 SW 7th St, Suite 1408, Miami, FL 33130.",
+      "note": "two intents (general+pricing) must both fire and merge into one reply"
+    }
+  ]
+}
