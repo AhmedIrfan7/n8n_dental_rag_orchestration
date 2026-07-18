@@ -1,9 +1,10 @@
-// De Roode Orthodontics voice client.
-// Orchestrates 3 already-verified endpoints directly (no audio passes
-// through n8n's binary handling, which keeps this integration low-risk):
+// Recall - voice front desk for any clinic.
+// Orchestrates endpoints directly (no audio passes through n8n's binary
+// handling, which keeps this integration low-risk):
 //   1. VOICE_BASE  /transcribe  (STT)
 //   2. N8N_BASE    /webhook/ask (text orchestrator - grounded reply)
 //   3. VOICE_BASE  /speak       (TTS)
+//   4. N8N_BASE    /webhook/ingest (crawl + extract + index a new clinic)
 // Defaults to localhost for local testing. When sharing this client over a
 // tunnel, the shared link carries ?voice=<tunnel>&n8n=<tunnel> so a remote
 // device's "localhost" (which would otherwise mean ITS OWN machine) is
@@ -20,8 +21,29 @@ const VOICE_BASE = params.get('voice') || 'http://localhost:8000';
 const N8N_BASE = params.get('n8n') || 'http://localhost:5679';
 const WEBHOOK_KEY = params.get('key') || '';
 const BAR_COUNT = 28;
+const RECENT_KEY = 'recall.recentClinics';
+const ACTIVE_KEY = 'recall.activeClinic';
+const MAX_RECENT = 6;
 
 const el = {
+  app: document.getElementById('app'),
+  tabAdd: document.getElementById('tabAdd'),
+  tabTalk: document.getElementById('tabTalk'),
+  tagline: document.getElementById('tagline'),
+
+  ingestForm: document.getElementById('ingestForm'),
+  ingestUrlInput: document.getElementById('ingestUrlInput'),
+  ingestSubmit: document.getElementById('ingestSubmit'),
+  scanBlock: document.getElementById('scanBlock'),
+  scanSteps: document.getElementById('scanSteps'),
+  resultCard: document.getElementById('resultCard'),
+  resultName: document.getElementById('resultName'),
+  resultStats: document.getElementById('resultStats'),
+  resultTalkBtn: document.getElementById('resultTalkBtn'),
+  ingestError: document.getElementById('ingestError'),
+  recentBlock: document.getElementById('recentBlock'),
+  recentChips: document.getElementById('recentChips'),
+
   stage: document.getElementById('stage'),
   stateLabel: document.getElementById('stateLabel'),
   stateWord: document.getElementById('stateWord'),
@@ -35,7 +57,8 @@ const el = {
   connDot: document.getElementById('connDot'),
   connLabel: document.getElementById('connLabel'),
   sessionShort: document.getElementById('sessionShort'),
-  websiteUrlInput: document.getElementById('websiteUrlInput'),
+  activeClinicName: document.getElementById('activeClinicName'),
+  switchClinicBtn: document.getElementById('switchClinicBtn'),
   player: document.getElementById('player'),
   replayBtn: document.getElementById('replayBtn'),
 };
@@ -48,6 +71,8 @@ let audioCtx = null;
 let analyser = null;
 let rafId = null;
 let barEls = [];
+let activeClinic = null; // { url, name }
+let scanTimer = null;
 
 function uuid() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -55,6 +80,15 @@ function uuid() {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+function fallbackName(url) {
+  try {
+    const host = new URL(url).hostname.replace(/^www\./, '');
+    const first = host.split('.')[0];
+    return first.charAt(0).toUpperCase() + first.slice(1);
+  } catch (e) {
+    return url;
+  }
 }
 
 // ---------- smile-arc bars ----------
@@ -112,7 +146,7 @@ function animateThinking() {
   loop();
 }
 
-// ---------- state machine ----------
+// ---------- state machine (talk view) ----------
 function setState(state, label, word) {
   el.stage.dataset.state = state;
   el.stateLabel.textContent = label;
@@ -187,6 +221,143 @@ async function checkConnection() {
   el.connDot.dataset.ok = 'false';
   el.connLabel.textContent = 'voice service unreachable';
 }
+
+// ---------- clinics: recent list + active clinic (localStorage only - no
+// backend "list clinics" endpoint exists, and adding one isn't needed for
+// this: the ingest response already tells us everything worth remembering) ----------
+function loadRecent() {
+  try { return JSON.parse(localStorage.getItem(RECENT_KEY)) || []; } catch (e) { return []; }
+}
+function saveRecent(list) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(list.slice(0, MAX_RECENT)));
+}
+function rememberClinic(clinic) {
+  const list = loadRecent().filter((c) => c.url !== clinic.url);
+  list.unshift(clinic);
+  saveRecent(list);
+  renderRecent();
+}
+function renderRecent() {
+  const list = loadRecent();
+  el.recentChips.innerHTML = '';
+  el.recentBlock.hidden = list.length === 0;
+  list.forEach((clinic) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'chip';
+    chip.textContent = clinic.name;
+    chip.addEventListener('click', () => {
+      setActiveClinic(clinic);
+      setView('talk');
+    });
+    el.recentChips.appendChild(chip);
+  });
+}
+function setActiveClinic(clinic) {
+  activeClinic = clinic;
+  localStorage.setItem(ACTIVE_KEY, JSON.stringify(clinic));
+  el.activeClinicName.textContent = clinic.name;
+  el.tabTalk.disabled = false;
+  rememberClinic(clinic);
+}
+function loadActiveClinic() {
+  try {
+    const c = JSON.parse(localStorage.getItem(ACTIVE_KEY));
+    if (c && c.url) return c;
+  } catch (e) { /* ignore */ }
+  return null;
+}
+
+// ---------- view switching ----------
+function setView(view) {
+  el.app.dataset.view = view;
+  el.tabAdd.setAttribute('aria-selected', String(view === 'add'));
+  el.tabTalk.setAttribute('aria-selected', String(view === 'talk'));
+  el.tagline.textContent = view === 'talk' && activeClinic
+    ? `Ask ${activeClinic.name} anything, out loud.`
+    : 'Bring any clinic online in about a minute.';
+}
+
+// ---------- ingest (add a clinic) ----------
+function startScanAnimation() {
+  const steps = Array.from(el.scanSteps.querySelectorAll('.scan-step'));
+  let i = 0;
+  const advance = () => {
+    steps.forEach((s, idx) => {
+      s.dataset.state = idx < i ? 'done' : idx === i ? 'active' : '';
+    });
+    i = (i + 1) % (steps.length + 1);
+  };
+  advance();
+  scanTimer = setInterval(advance, 2400);
+}
+function stopScanAnimation() {
+  if (scanTimer) clearInterval(scanTimer);
+  scanTimer = null;
+  el.scanSteps.querySelectorAll('.scan-step').forEach((s) => { s.dataset.state = ''; });
+}
+
+el.ingestForm.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const url = el.ingestUrlInput.value.trim();
+  if (!url) return;
+
+  el.ingestSubmit.disabled = true;
+  el.ingestUrlInput.disabled = true;
+  el.resultCard.hidden = true;
+  el.ingestError.hidden = true;
+  el.scanBlock.hidden = false;
+  startScanAnimation();
+
+  try {
+    const res = await fetch(N8N_BASE + '/webhook/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Webhook-Key': WEBHOOK_KEY },
+      body: JSON.stringify({ website_url: url }),
+    });
+    if (!res.ok) throw new Error('ingest_failed_' + res.status);
+    let body = await res.json();
+    if (Array.isArray(body)) body = body[0] || {};
+    if (!body.ok) throw new Error('ingest_failed');
+
+    const name = body.clinic_name || fallbackName(url);
+    const c = body.extracted || {};
+    const chunks = body.indexed && body.indexed.chunks_indexed;
+    const parts = [];
+    if (c.services) parts.push(`${c.services} service${c.services === 1 ? '' : 's'}`);
+    if (c.doctors) parts.push(`${c.doctors} doctor${c.doctors === 1 ? '' : 's'}`);
+    if (c.pricing) parts.push(`${c.pricing} price entr${c.pricing === 1 ? 'y' : 'ies'}`);
+    if (c.faqs) parts.push(`${c.faqs} FAQ${c.faqs === 1 ? '' : 's'}`);
+    if (c.policies) parts.push(`${c.policies} polic${c.policies === 1 ? 'y' : 'ies'}`);
+    let stats = parts.length ? parts.join(' · ') : 'Indexed';
+    if (chunks) stats += ` · ${chunks} knowledge chunks`;
+
+    el.resultName.textContent = name;
+    el.resultStats.textContent = stats;
+    el.resultCard.hidden = false;
+
+    const clinic = { url, name };
+    el.resultTalkBtn.onclick = () => {
+      setActiveClinic(clinic);
+      setView('talk');
+      resetConversation();
+    };
+    rememberClinic(clinic);
+  } catch (e) {
+    console.error(e);
+    el.ingestError.textContent = "Couldn't add that clinic right now. Check the URL and try again in a moment.";
+    el.ingestError.hidden = false;
+  } finally {
+    stopScanAnimation();
+    el.scanBlock.hidden = true;
+    el.ingestSubmit.disabled = false;
+    el.ingestUrlInput.disabled = false;
+  }
+});
+
+el.tabAdd.addEventListener('click', () => setView('add'));
+el.tabTalk.addEventListener('click', () => { if (!el.tabTalk.disabled) setView('talk'); });
+el.switchClinicBtn.addEventListener('click', () => setView('add'));
 
 // ---------- recording ----------
 async function startRecording() {
@@ -265,7 +436,7 @@ async function runPipeline(audioBlob) {
       body: JSON.stringify({
         query,
         session_id: sessionId,
-        website_url: el.websiteUrlInput.value.trim(),
+        website_url: activeClinic ? activeClinic.url : '',
       }),
     });
     if (!askRes.ok) throw new Error('ask_failed');
@@ -361,7 +532,16 @@ buildBars();
 updateSessionDisplay();
 checkConnection();
 setInterval(checkConnection, 15000);
+renderRecent();
+
+const savedActive = loadActiveClinic();
+if (savedActive) {
+  setActiveClinic(savedActive);
+  setView('talk');
+} else {
+  setView('add');
+}
 
 // Exposed for headless/dev testing (e.g. feeding a prerecorded file through
 // the exact same pipeline without needing live microphone hardware).
-window.__voiceClientTest = { runPipeline, setState, setIdle };
+window.__voiceClientTest = { runPipeline, setState, setIdle, setActiveClinic, setView };

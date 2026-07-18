@@ -3,66 +3,120 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>De Roode Orthodontics — Ask us anything, out loud</title>
+<title>Recall — voice front desk for any clinic</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;1,9..144,400;1,9..144,500&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400;1,9..144,500&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
-<div class="app">
+<div class="app" id="app" data-view="add">
+
   <header class="topbar">
     <div class="brand">
       <span class="brand-dot" aria-hidden="true"></span>
-      <span class="brand-name">De Roode Orthodontics</span>
+      <span class="brand-name">Recall</span>
     </div>
-    <p class="tagline">Ask us anything, out loud.</p>
+    <nav class="view-tabs" role="tablist" aria-label="View">
+      <button class="view-tab" id="tabAdd" type="button" role="tab" data-view="add" aria-selected="true">Add a clinic</button>
+      <button class="view-tab" id="tabTalk" type="button" role="tab" data-view="talk" aria-selected="false" disabled>Talk</button>
+    </nav>
   </header>
+  <p class="tagline" id="tagline">Bring any clinic online in about a minute.</p>
 
-  <main class="stage" id="stage">
-    <p class="state-label" id="stateLabel">Ready</p>
-    <h1 class="state-word" id="stateWord">to listen</h1>
+  <!-- ================= ADD A CLINIC ================= -->
+  <section class="view view-add" id="viewAdd">
+    <div class="add-card">
+      <p class="eyebrow">New clinic</p>
+      <h1 class="add-heading">Paste a clinic's website.<br /><em>We'll do the rest.</em></h1>
 
-    <div class="arc-wrap" aria-hidden="true">
-      <svg class="arc-bg" viewBox="0 0 320 80" preserveAspectRatio="none">
-        <path d="M4,70 Q160,4 316,70" />
-      </svg>
-      <div class="bars" id="bars"></div>
+      <form class="ingest-form" id="ingestForm">
+        <input
+          id="ingestUrlInput"
+          type="url"
+          inputmode="url"
+          placeholder="https://example-clinic.com"
+          autocomplete="off"
+          spellcheck="false"
+          required
+        />
+        <button class="cta" type="submit" id="ingestSubmit">Add clinic →</button>
+      </form>
+      <p class="ingest-note">We'll read the site, pull services, pricing, hours and FAQs, and build a voice-searchable index. Takes about a minute.</p>
+
+      <div class="scan" id="scanBlock" hidden aria-live="polite">
+        <div class="scan-rail"><div class="scan-comet" id="scanComet"></div></div>
+        <ol class="scan-steps" id="scanSteps">
+          <li class="scan-step" data-step="0">Reading pages</li>
+          <li class="scan-step" data-step="1">Pulling out the facts</li>
+          <li class="scan-step" data-step="2">Building the index</li>
+        </ol>
+      </div>
+
+      <div class="result-card" id="resultCard" hidden>
+        <p class="result-eyebrow">Ready</p>
+        <p class="result-name" id="resultName"></p>
+        <p class="result-stats" id="resultStats"></p>
+        <button class="cta" type="button" id="resultTalkBtn">Talk to them →</button>
+      </div>
+
+      <p class="ingest-error" id="ingestError" hidden role="alert"></p>
     </div>
 
-    <button class="mic-btn" id="micBtn" type="button">
-      <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-        <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="1.6"/>
-        <path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-      </svg>
-      <span id="micBtnLabel">Start talking</span>
-    </button>
-
-    <p class="hint" id="hint">Ask about services, pricing, hours, or book a visit.</p>
-    <button class="replay-btn" id="replayBtn" type="button" hidden>🔊 Play answer</button>
-  </main>
-
-  <section class="transcript-wrap">
-    <div class="transcript-head">
-      <span>Conversation</span>
-      <button class="reset-btn" id="resetBtn" type="button">New conversation</button>
-    </div>
-    <div class="transcript" id="transcript">
-      <p class="transcript-empty" id="transcriptEmpty">Nothing yet — press the mic to start.</p>
+    <div class="recent" id="recentBlock" hidden>
+      <p class="recent-head">Recent clinics</p>
+      <div class="chips" id="recentChips"></div>
     </div>
   </section>
 
-  <footer class="footer">
-    <span class="footer-item"><span class="dot" id="connDot"></span><span id="connLabel">checking connection…</span></span>
-    <span class="footer-sep">·</span>
-    <label class="footer-item footer-url">
-      clinic:
-      <input id="websiteUrlInput" type="text" value="https://www.deroodeortho.com/" spellcheck="false" />
-    </label>
-    <span class="footer-sep">·</span>
-    <span class="footer-item">session <span id="sessionShort">—</span></span>
-  </footer>
+  <!-- ================= TALK ================= -->
+  <section class="view view-talk" id="viewTalk">
+    <main class="stage" id="stage">
+      <p class="state-label" id="stateLabel">Ready</p>
+      <h2 class="state-word" id="stateWord">to listen</h2>
+
+      <div class="arc-wrap" aria-hidden="true">
+        <svg class="arc-bg" viewBox="0 0 320 80" preserveAspectRatio="none">
+          <path d="M4,70 Q160,4 316,70" />
+        </svg>
+        <div class="bars" id="bars"></div>
+      </div>
+
+      <button class="mic-btn" id="micBtn" type="button">
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <span id="micBtnLabel">Start talking</span>
+      </button>
+
+      <p class="hint" id="hint">Ask about services, pricing, hours, or book a visit.</p>
+      <button class="replay-btn" id="replayBtn" type="button" hidden>🔊 Play answer</button>
+    </main>
+
+    <section class="transcript-wrap">
+      <div class="transcript-head">
+        <span>Conversation</span>
+        <button class="reset-btn" id="resetBtn" type="button">New conversation</button>
+      </div>
+      <div class="transcript" id="transcript">
+        <p class="transcript-empty" id="transcriptEmpty">Nothing yet — press the mic to start.</p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span class="footer-item"><span class="dot" id="connDot"></span><span id="connLabel">checking connection…</span></span>
+      <span class="footer-sep">·</span>
+      <span class="footer-item">
+        talking with <strong id="activeClinicName">—</strong>
+        <button class="switch-btn" id="switchClinicBtn" type="button">switch</button>
+      </span>
+      <span class="footer-sep">·</span>
+      <span class="footer-item">session <span id="sessionShort">—</span></span>
+    </footer>
+  </section>
+
 </div>
 
 <audio id="player" hidden></audio>

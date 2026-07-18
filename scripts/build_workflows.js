@@ -148,7 +148,7 @@ writeWf('02_extract_facts.json', {
       },
       credentials: WEBHOOK_AUTH_CRED,
       id: 'b2000000-0000-0000-0000-000000000007', name: 'TriggerIndex', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [1120, 0] },
-    { parameters: { jsCode: "const c = $('ParseFacts').first().json.counts; return [{ json: { ok: true, website_url: $('ParseFacts').first().json.website_url, extracted: c, indexed: $input.first().json } }];" },
+    { parameters: { jsCode: "const pf = $('ParseFacts').first().json; const c = pf.counts; let clinicName = null; try { clinicName = JSON.parse(pf.clinic_json).name || null; } catch (e) {} return [{ json: { ok: true, website_url: pf.website_url, clinic_name: clinicName, extracted: c, indexed: $input.first().json } }];" },
       id: 'b2000000-0000-0000-0000-000000000008', name: 'Done', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1340, 0] },
   ],
   connections: {
