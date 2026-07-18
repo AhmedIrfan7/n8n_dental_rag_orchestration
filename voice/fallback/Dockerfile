@@ -8,21 +8,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Network on this host has been measured very slow but steady - pip's
+# default read-timeout is too short for that (it gives up between chunks
+# even though the download IS still progressing), causing spurious
+# ReadTimeoutError failures. Raise the timeout and add retries.
+RUN pip install --no-cache-dir --timeout 300 --retries 10 -r requirements.txt
 
 # Bake in the Piper voice model at build time (no runtime download flakiness).
+# --retry/--retry-all-errors so a stalled connection is retried, not fatal.
 ARG PIPER_VOICE=en_US-lessac-medium
 RUN mkdir -p /app/voices && \
-    curl -fsSL -o /app/voices/${PIPER_VOICE}.onnx \
+    curl --retry 10 --retry-all-errors --retry-delay 5 -fsSL -o /app/voices/${PIPER_VOICE}.onnx \
       "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE}.onnx" && \
-    curl -fsSL -o /app/voices/${PIPER_VOICE}.onnx.json \
+    curl --retry 10 --retry-all-errors --retry-delay 5 -fsSL -o /app/voices/${PIPER_VOICE}.onnx.json \
       "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE}.onnx.json"
 
 COPY app.py .
 
 # Pre-download the Whisper model so the container's first real request isn't
-# slowed down by (or fails on) a cold download.
+# slowed down by (or fails on) a cold download. "base" gives meaningfully
+# better accuracy on domain terms (e.g. "Invisalign") than "tiny" - worth
+# the extra ~70MB. Override with --build-arg WHISPER_MODEL_SIZE=tiny if a
+# smaller download is needed again.
 ARG WHISPER_MODEL_SIZE=base
+ENV HF_HUB_DOWNLOAD_TIMEOUT=300
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL_SIZE}', device='cpu', compute_type='int8')"
 
 ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}

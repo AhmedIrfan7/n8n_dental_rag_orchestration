@@ -95,6 +95,6 @@ async def speak(payload: dict):
     voice = get_piper()
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
-        voice.synthesize_wav(text, wav_file)
+        voice.synthesize(text, wav_file)
     audio_bytes = buf.getvalue()
     return Response(content=audio_bytes, media_type="audio/wav")
