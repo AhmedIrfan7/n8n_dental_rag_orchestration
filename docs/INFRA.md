@@ -11,6 +11,7 @@ Isolated Docker stack defined in [`infra/docker-compose.yml`](../infra/docker-co
 | Postgres (pgvector) | `dental-postgres` | 5433 | 5432 | Clinic facts + session memory |
 | Redis | `dental-redis` | 6380 | 6379 | Cache / session scratch |
 | Ollama | `dental-ollama` | 11435 | 11434 | Local embeddings (`nomic-embed-text`) |
+| Voice fallback | `dental-voice` | 8000 | 8000 | STT/TTS (`faster-whisper` + Piper) — see `docs/VOICE.md` |
 
 Internal service-to-service URLs (used inside n8n nodes):
 `http://dental-qdrant:6333`, `dental-postgres:5432`, `http://dental-ollama:11434`, `dental-redis:6379`.

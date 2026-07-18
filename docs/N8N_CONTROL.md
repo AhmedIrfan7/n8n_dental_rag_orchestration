@@ -36,6 +36,18 @@ Placeholders substituted from `.env` at deploy time (keeps committed JSON portab
 - Committed workflow JSON contains only `{name, nodes, connections, settings}` (no instance `id`); the deploy helper upserts by `name` and sends the **raw JSON as UTF-8 bytes** (PS 5.1 `ConvertTo-Json`/string bodies corrupt large `jsCode`).
 - **Activation flow (2.x):** create/update via `/rest` → `n8n publish:workflow --id` → PATCH `active:true` → **restart** to register webhooks. The deploy helper's `-Activate` does all of this.
 
+## ⚠️ A node with 0 output items silently stops the whole chain
+Hit this **three times** across the project (`store_facts.sql` returning 0 rows when a run legitimately had zero policies; `find_open_booking.sql` returning 0 rows on a first-time booking; `load_history.sql` returning 0 rows for a brand-new conversation): if a node's output has 0 items, **every node connected downstream of it simply never executes** — no error anywhere, the execution just reports `success` and stops. This is easy to miss because nothing looks wrong until you notice the response is empty/wrong.
+
+**A wrapper Code node placed immediately after does NOT fix this** — the wrapper is itself just another node receiving 0 items on its input, so it's skipped too. The only real fix is at the SQL/data level: make the query always return **exactly one row**, using either:
+- `UNION ALL` with a `NULL`-filled sentinel row when nothing matches (see `db/queries/find_open_booking.sql`), or
+- an aggregation (`jsonb_agg`) that collapses N rows — including zero — into one row containing a JSON array column (see `db/queries/load_history.sql`).
+
+Related, separate gotcha: referencing another node via `$('NodeName')` **throws** if that node did not execute in the current run (e.g. the untaken branch of an IF) — it does not return `undefined`. Never write `$('A').first() ? ... : $('B').first()...` to pick between two IF branches; that throws on whichever branch didn't run. Use try/catch (see `orchestrator/prep_assistant_msg.js`, `orchestrator/compose_response.js`).
+
+## ⚠️ A webhook's own response body is a JSON array, not the object itself
+A webhook trigger with `responseData:'allEntries'` returns `[{...}]` — a **one-element array** — not `{...}` directly. n8n's own HTTP Request *node* auto-unwraps this when it calls another workflow's webhook. `this.helpers.httpRequest()` called manually from inside a **Code** node does **not** — it returns the raw array. `{ ...res }` spread on an unwrapped array silently produces `{0: {...}}` (a stray numeric key) instead of the real fields, with no error anywhere (see `orchestrator/route_and_call.js`'s fix: `if (Array.isArray(res)) res = res[0] || {}` before spreading).
+
 ## ⚠️ JS Task Runner sandbox constraints (critical for all Code nodes)
 Code nodes run in the **JS Task Runner** (out-of-process). The sandbox is restricted:
 - **No `URL` global** — `new URL()` throws `URL is not defined`. Parse/join URLs with string ops.
