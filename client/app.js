@@ -37,6 +37,7 @@ const el = {
   sessionShort: document.getElementById('sessionShort'),
   websiteUrlInput: document.getElementById('websiteUrlInput'),
   player: document.getElementById('player'),
+  replayBtn: document.getElementById('replayBtn'),
 };
 
 let sessionId = null;
@@ -133,6 +134,10 @@ function setError(message) {
   el.micBtn.dataset.recording = 'false';
   el.micBtnLabel.textContent = 'Start talking';
 }
+function hideReplay() {
+  el.replayBtn.hidden = true;
+  el.replayBtn.onclick = null;
+}
 
 // ---------- transcript ----------
 function addTurn(who, message) {
@@ -158,6 +163,7 @@ function updateSessionDisplay() {
 function resetConversation() {
   sessionId = null;
   updateSessionDisplay();
+  hideReplay();
   el.transcript.innerHTML = '';
   const empty = document.createElement('p');
   empty.className = 'transcript-empty';
@@ -190,6 +196,7 @@ async function startRecording() {
     setError('We need your microphone to hear your question. Allow access in your browser and try again.');
     return;
   }
+  hideReplay();
 
   audioChunks = [];
   const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
@@ -230,12 +237,19 @@ async function handleRecordingStopped() {
 
 // ---------- the actual pipeline (also used for programmatic testing) ----------
 async function runPipeline(audioBlob) {
+  hideReplay();
+  let query, reply;
+
+  // Stage 1+2: transcribe, then ask the assistant. A failure here means we
+  // genuinely have no answer yet, so the "assistant isn't responding"
+  // message is accurate.
   try {
     const form = new FormData();
     form.append('file', audioBlob, 'question.webm');
     const transcribeRes = await fetch(VOICE_BASE + '/transcribe', { method: 'POST', body: form });
     if (!transcribeRes.ok) throw new Error('transcribe_failed');
-    const { text: query } = await transcribeRes.json();
+    const transcribed = await transcribeRes.json();
+    query = transcribed.text;
     if (!query || !query.trim()) {
       setError("We couldn't make out what you said. Try speaking a little closer to the mic.");
       return;
@@ -257,42 +271,80 @@ async function runPipeline(audioBlob) {
     if (!askRes.ok) throw new Error('ask_failed');
     let askBody = await askRes.json();
     if (Array.isArray(askBody)) askBody = askBody[0] || {};
-    const reply = askBody.reply || "I'm not sure - please contact the clinic directly.";
+    reply = askBody.reply || "I'm not sure - please contact the clinic directly.";
     sessionId = askBody.session_id || sessionId;
     updateSessionDisplay();
     addTurn('clinic', reply);
-
-    setState('speaking', 'Speaking', 'here you go');
-    el.hint.textContent = 'Playing the answer…';
-
-    const speakRes = await fetch(VOICE_BASE + '/speak', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: reply }),
-    });
-    if (!speakRes.ok) throw new Error('speak_failed');
-    const audioOut = await speakRes.blob();
-    const url = URL.createObjectURL(audioOut);
-    el.player.src = url;
-
-    const playCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = playCtx.createMediaElementSource(el.player);
-    const outAnalyser = playCtx.createAnalyser();
-    outAnalyser.fftSize = 128;
-    src.connect(outAnalyser);
-    outAnalyser.connect(playCtx.destination);
-    animateFromAnalyser(outAnalyser, playCtx);
-
-    await el.player.play();
-    el.player.onended = () => {
-      stopArcAnimation();
-      playCtx.close();
-      setIdle('Ask about services, pricing, hours, or book a visit.');
-    };
   } catch (e) {
     console.error(e);
     setError("The clinic assistant isn't responding right now. Try again in a moment.");
+    return;
   }
+
+  // Stage 3: speak the reply out loud. The text answer above is already
+  // correct and visible - a failure here (TTS error, or a browser blocking
+  // programmatic audio playback because it's several awaits removed from
+  // the click that started this) should never overwrite that with a
+  // misleading "not responding" message. Fall back to a manual play button
+  // instead, which is a real user gesture and always allowed to play.
+  try {
+    await speakAndPlay(reply);
+  } catch (e) {
+    console.error(e);
+    stopArcAnimation();
+    setState('idle', 'Answer ready', 'tap to hear it');
+    el.hint.textContent = "Here's the answer above. Playback didn't start automatically - tap below to hear it.";
+    el.micBtn.disabled = false;
+    el.micBtn.dataset.recording = 'false';
+    el.micBtnLabel.textContent = 'Start talking';
+    el.replayBtn.hidden = false;
+    el.replayBtn.onclick = () => speakAndPlay(reply).catch((err) => console.error(err));
+  }
+}
+
+// A media element can only ever be wired into ONE MediaElementSourceNode for
+// its whole lifetime (a second createMediaElementSource() call throws) - so
+// this graph is built lazily once and reused for every turn, including
+// replays, instead of created fresh per call.
+let playCtx = null;
+let outAnalyser = null;
+function getPlaybackGraph() {
+  if (playCtx) return { playCtx, outAnalyser };
+  playCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = playCtx.createMediaElementSource(el.player);
+  outAnalyser = playCtx.createAnalyser();
+  outAnalyser.fftSize = 128;
+  src.connect(outAnalyser);
+  outAnalyser.connect(playCtx.destination);
+  return { playCtx, outAnalyser };
+}
+
+async function speakAndPlay(reply) {
+  setState('speaking', 'Speaking', 'here you go');
+  el.hint.textContent = 'Playing the answer…';
+
+  const speakRes = await fetch(VOICE_BASE + '/speak', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: reply }),
+  });
+  if (!speakRes.ok) throw new Error('speak_failed');
+  const audioOut = await speakRes.blob();
+  const url = URL.createObjectURL(audioOut);
+  el.player.src = url;
+
+  const { playCtx: ctx, outAnalyser: analyserNode } = getPlaybackGraph();
+  if (ctx.state === 'suspended') await ctx.resume();
+  animateFromAnalyser(analyserNode, ctx);
+
+  await el.player.play();
+
+  el.replayBtn.hidden = false;
+  el.replayBtn.onclick = () => speakAndPlay(reply).catch((err) => console.error(err));
+  el.player.onended = () => {
+    stopArcAnimation();
+    setIdle('Ask about services, pricing, hours, or book a visit.');
+  };
 }
 
 // ---------- wiring ----------

@@ -204,6 +204,24 @@ html, body {
   min-height: 1.2em;
 }
 
+.replay-btn {
+  appearance: none;
+  border: 1px solid var(--teal);
+  background: transparent;
+  color: var(--teal-deep);
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  cursor: pointer;
+  margin-top: 14px;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.replay-btn:hover { background: rgba(63, 114, 104, 0.1); transform: translateY(-1px); }
+.replay-btn:active { transform: translateY(0); }
+.replay-btn:focus-visible { outline: 3px solid var(--teal); outline-offset: 3px; }
+
 /* ---------- transcript ---------- */
 .transcript-wrap {
   background: var(--card);
