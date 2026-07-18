@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>De Roode Orthodontics — Ask us anything, out loud</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;1,9..144,400;1,9..144,500&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot" aria-hidden="true"></span>
+      <span class="brand-name">De Roode Orthodontics</span>
+    </div>
+    <p class="tagline">Ask us anything, out loud.</p>
+  </header>
+
+  <main class="stage" id="stage">
+    <p class="state-label" id="stateLabel">Ready</p>
+    <h1 class="state-word" id="stateWord">to listen</h1>
+
+    <div class="arc-wrap" aria-hidden="true">
+      <svg class="arc-bg" viewBox="0 0 320 80" preserveAspectRatio="none">
+        <path d="M4,70 Q160,4 316,70" />
+      </svg>
+      <div class="bars" id="bars"></div>
+    </div>
+
+    <button class="mic-btn" id="micBtn" type="button">
+      <svg class="mic-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Z" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M19 11a7 7 0 0 1-14 0M12 18v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <span id="micBtnLabel">Start talking</span>
+    </button>
+
+    <p class="hint" id="hint">Ask about services, pricing, hours, or book a visit.</p>
+  </main>
+
+  <section class="transcript-wrap">
+    <div class="transcript-head">
+      <span>Conversation</span>
+      <button class="reset-btn" id="resetBtn" type="button">New conversation</button>
+    </div>
+    <div class="transcript" id="transcript">
+      <p class="transcript-empty" id="transcriptEmpty">Nothing yet — press the mic to start.</p>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <span class="footer-item"><span class="dot" id="connDot"></span><span id="connLabel">checking connection…</span></span>
+    <span class="footer-sep">·</span>
+    <label class="footer-item footer-url">
+      clinic:
+      <input id="websiteUrlInput" type="text" value="https://www.deroodeortho.com/" spellcheck="false" />
+    </label>
+    <span class="footer-sep">·</span>
+    <span class="footer-item">session <span id="sessionShort">—</span></span>
+  </footer>
+</div>
+
+<audio id="player" hidden></audio>
+<script src="app.js"></script>
+</body>
+</html>

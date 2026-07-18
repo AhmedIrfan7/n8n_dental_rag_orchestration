@@ -19,9 +19,20 @@ import wave
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 app = FastAPI(title="Voice Fallback Service")
+
+# The browser voice client calls this service directly (cross-origin from
+# wherever the static client is served). Local dev tool with no auth/session
+# state of its own, so an open CORS policy is fine here.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL_SIZE", "base")
 PIPER_VOICE = os.environ.get("PIPER_VOICE", "en_US-lessac-medium")

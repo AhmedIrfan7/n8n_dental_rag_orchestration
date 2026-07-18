@@ -354,7 +354,7 @@ const composeResponse = read('orchestrator/compose_response.js');
 writeWf('10_orchestrator.json', {
   name: '10_orchestrator',
   nodes: [
-    { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+    { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: { allowedOrigins: '*' } },
       id: 'a0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-1080, 0], webhookId: 'a0000000-0000-0000-0000-000000000001' },
     { parameters: { jsCode: prepSession },
       id: 'a0000000-0000-0000-0000-00000000000b', name: 'PrepSession', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-860, 0] },

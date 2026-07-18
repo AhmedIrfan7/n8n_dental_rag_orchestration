@@ -7,7 +7,9 @@
         "path": "ask",
         "responseMode": "lastNode",
         "responseData": "allEntries",
-        "options": {}
+        "options": {
+          "allowedOrigins": "*"
+        }
       },
       "id": "a0000000-0000-0000-0000-000000000001",
       "name": "Webhook",
