@@ -1,0 +1,295 @@
+{
+  "name": "10_orchestrator",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ask",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "a0000000-0000-0000-0000-000000000001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -600,
+        0
+      ],
+      "webhookId": "a0000000-0000-0000-0000-000000000001"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Intent Classifier — build the OpenAI request (Code node).\n// Input : webhook body { query, session_id?, website_url }\n// Output: { query, session_id, website_url, oai_body }\nconst body = $input.first().json.body || $input.first().json || {};\nconst query = String(body.query || '').trim();\nif (!query) throw new Error('query is required');\n\nconst sys = [\n  'Classify a dental/orthodontic clinic chatbot query into one or more intents.',\n  'Intents: \"pricing\" (cost/price/insurance questions), \"services\" (treatments, FAQs, general dental/ortho questions),',\n  '\"general\" (clinic info: doctors, location, contact, policies, about), \"booking\" (scheduling/appointment requests).',\n  'A query can match multiple intents. Return ONLY JSON:',\n  '{ \"intents\": [ { \"name\": \"pricing\"|\"services\"|\"general\"|\"booking\", \"confidence\": 0.0-1.0 } ] }',\n  'Include only intents that are plausibly relevant; omit ones that clearly do not apply.',\n  'If the query is unrelated to a dental/orthodontic clinic (e.g. general trivia, unrelated topics), return { \"intents\": [] }.',\n].join('\\n');\n\nreturn [{\n  json: {\n    query, session_id: body.session_id || null, website_url: body.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: query },\n      ],\n    },\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000002",
+      "name": "ClassifyIntent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "a0000000-0000-0000-0000-000000000003",
+      "name": "ClassifyOpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -160,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "__OPENAI_CRED_ID__",
+          "name": "OpenAI Dental"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Router + Parallel Executor — n8n Code node (Run Once for All Items).\n// Parses the classifier's intents, fans out to the relevant sub-agent\n// webhooks CONCURRENTLY via Promise.all (true parallel execution, not\n// sequential HTTP nodes), and tolerates partial failures (one agent\n// erroring/timing out does not fail the whole request).\nconst helpers = this.helpers;\nconst CONFIDENCE_THRESHOLD = 0.4;\nconst AGENT_TIMEOUT_MS = 60000;\nconst BASE = 'http://localhost:5678/webhook/';\nconst AGENT_PATHS = {\n  pricing: 'agent/pricing',\n  services: 'agent/services-faq',\n  general: 'agent/general',\n  booking: 'agent/booking',\n};\n\nconst cls = $('ClassifyIntent').first().json;\nconst query = cls.query;\nconst session_id = cls.session_id;\nconst website_url = cls.website_url;\n\nlet intents = [];\ntry { intents = (JSON.parse($input.first().json.choices[0].message.content).intents) || []; } catch (e) { intents = []; }\nconst routed = intents.filter(function (i) { return i && AGENT_PATHS[i.name] && i.confidence >= CONFIDENCE_THRESHOLD; });\n\nasync function callAgent(name, path) {\n  try {\n    let res = await helpers.httpRequest({\n      method: 'POST', url: BASE + path,\n      body: { query, website_url, session_id }, json: true, timeout: AGENT_TIMEOUT_MS,\n    });\n    // Sub-agent webhooks respond with responseData:'allEntries', so the raw\n    // body is a JSON array of items (n8n's dedicated HTTP Request node\n    // auto-unwraps this; helpers.httpRequest called from a Code node does not).\n    if (Array.isArray(res)) res = res[0] || {};\n    return { intent: name, ok: true, ...res };\n  } catch (e) {\n    return { intent: name, ok: false, error: String((e && e.message) || e) };\n  }\n}\n\nlet results;\nlet usedFallback = false;\nif (routed.length === 0) {\n  usedFallback = true;\n  results = [{\n    intent: 'fallback', ok: true, grounded: false,\n    answer: \"I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?\",\n  }];\n} else {\n  results = await Promise.all(routed.map(function (r) { return callAgent(r.name, AGENT_PATHS[r.name]); }));\n}\n\nreturn [{\n  json: {\n    query, session_id, website_url,\n    intents: intents,\n    routed: routed.map(function (r) { return r.name; }),\n    used_fallback: usedFallback,\n    agent_results: results,\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000004",
+      "name": "RouteAndCall",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Response Merger — n8n Code node (Run Once for All Items).\n// Collects the parallel sub-agent outputs into one deduped context bundle.\n// Input : RouteAndCall's output { query, agent_results[], used_fallback, ... }\nconst d = $input.first().json;\nconst results = d.agent_results || [];\n\nconst seen = new Set();\nconst answers = [];\nlet any_grounded = false;\nfor (const r of results) {\n  if (!r || !r.answer) continue;\n  const key = r.answer.trim().toLowerCase();\n  if (seen.has(key)) continue;\n  seen.add(key);\n  if (r.grounded) any_grounded = true;\n  answers.push({ intent: r.intent, grounded: !!r.grounded, text: r.answer });\n}\n\nreturn [{\n  json: {\n    query: d.query, session_id: d.session_id, website_url: d.website_url,\n    intents: d.intents, routed: d.routed, used_fallback: d.used_fallback,\n    any_grounded,\n    answers,\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000005",
+      "name": "MergeResults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        280,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Synthesizer request builder — n8n Code node.\n// Merges the (already-grounded-safe) sub-agent answers into ONE professional\n// reply. If no sub-agent ran (used_fallback) or produced an answer, skip the\n// LLM call entirely and pass the safe deflection straight through - never\n// hand a fully-unrelated query to a \"make it sound nice\" pass.\nconst d = $input.first().json;\n\nif (d.used_fallback || d.answers.length === 0) {\n  return [{\n    json: {\n      query: d.query, session_id: d.session_id,\n      skip_llm: true,\n      final_answer: (d.answers[0] && d.answers[0].text) ||\n        \"I'm not sure I can help with that from what I know about this clinic. Could you ask about services, pricing, hours, or booking an appointment?\",\n    },\n  }];\n}\n\nconst bundle = d.answers.map(function (a, i) {\n  return '[' + (i + 1) + '] (' + a.intent + (a.grounded ? '' : ', not grounded') + ') ' + a.text;\n}).join('\\n\\n');\n\nconst sys = [\n  'You are the front-desk voice/chat assistant for a dental/orthodontic clinic.',\n  'Combine the sub-agent answers below into ONE natural, warm, professional reply to the patient.',\n  'Do not add any fact not present in the sub-agent answers. Do not repeat the same point twice.',\n  'If some answers say information is unavailable, acknowledge that briefly rather than glossing over it.',\n  'Keep it concise (<= 100 words), no bullet points, no citation markers - just plain conversational text suitable for text-to-speech.',\n].join('\\n');\n\nconst user = 'PATIENT QUESTION: ' + d.query + '\\n\\nSUB-AGENT ANSWERS:\\n' + bundle;\n\nreturn [{\n  json: {\n    query: d.query, session_id: d.session_id,\n    skip_llm: false,\n    oai_body: {\n      model: 'gpt-4o',\n      temperature: 0.3,\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: user },\n      ],\n    },\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000006",
+      "name": "BuildSynthesisReq",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.skip_llm }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-000000000007",
+      "name": "IsSkipLLM",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-000000000008",
+      "name": "FinalizeSkip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.oai_body) }}",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "a0000000-0000-0000-0000-000000000009",
+      "name": "SynthOpenAI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        -80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "openAiApi": {
+          "id": "__OPENAI_CRED_ID__",
+          "name": "OpenAI Dental"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finalize — runs after either the Synthesizer OpenAI call or the skip-LLM\n// passthrough. Produces the orchestrator's single response shape.\n// Node name tells us which branch ran (IsSkipLLM routes here from both sides).\nconst d = $('BuildSynthesisReq').first().json;\nconst merged = $('MergeResults').first().json;\n\nlet reply;\nif (d.skip_llm) {\n  reply = d.final_answer;\n} else {\n  try { reply = $input.first().json.choices[0].message.content.trim(); }\n  catch (e) { reply = (merged.answers[0] && merged.answers[0].text) || \"I'm not sure - please contact the clinic directly.\"; }\n}\n\nreturn [{\n  json: {\n    reply,\n    session_id: d.session_id,\n    intents: merged.intents,\n    routed: merged.routed,\n    grounded: merged.any_grounded,\n    sources: merged.answers.map(function (a) { return { intent: a.intent, grounded: a.grounded }; }),\n  },\n}];\n"
+      },
+      "id": "a0000000-0000-0000-0000-00000000000a",
+      "name": "FinalizeSynth",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1160,
+        -80
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "ClassifyIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClassifyIntent": {
+      "main": [
+        [
+          {
+            "node": "ClassifyOpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClassifyOpenAI": {
+      "main": [
+        [
+          {
+            "node": "RouteAndCall",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RouteAndCall": {
+      "main": [
+        [
+          {
+            "node": "MergeResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MergeResults": {
+      "main": [
+        [
+          {
+            "node": "BuildSynthesisReq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "BuildSynthesisReq": {
+      "main": [
+        [
+          {
+            "node": "IsSkipLLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsSkipLLM": {
+      "main": [
+        [
+          {
+            "node": "FinalizeSkip",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SynthOpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SynthOpenAI": {
+      "main": [
+        [
+          {
+            "node": "FinalizeSynth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

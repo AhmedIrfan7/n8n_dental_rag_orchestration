@@ -317,3 +317,62 @@ writeWf('11_booking_agent.json', {
   },
   settings: { executionOrder: 'v1' },
 });
+
+// ---------------- 10_orchestrator ----------------
+const classifyIntent = read('orchestrator/classify_intent.js');
+const routeAndCall = read('orchestrator/route_and_call.js');
+const mergeResults = read('orchestrator/merge_results.js');
+const buildSynthesisReq = read('orchestrator/build_synthesis_req.js');
+const finalizeJs = read('orchestrator/finalize.js');
+
+writeWf('10_orchestrator.json', {
+  name: '10_orchestrator',
+  nodes: [
+    { parameters: { httpMethod: 'POST', path: 'ask', responseMode: 'lastNode', responseData: 'allEntries', options: {} },
+      id: 'a0000000-0000-0000-0000-000000000001', name: 'Webhook', type: 'n8n-nodes-base.webhook', typeVersion: 2, position: [-600, 0], webhookId: 'a0000000-0000-0000-0000-000000000001' },
+    { parameters: { jsCode: classifyIntent },
+      id: 'a0000000-0000-0000-0000-000000000002', name: 'ClassifyIntent', type: 'n8n-nodes-base.code', typeVersion: 2, position: [-380, 0] },
+    { parameters: {
+        method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
+        authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
+        options: { timeout: 45000 },
+      },
+      id: 'a0000000-0000-0000-0000-000000000003', name: 'ClassifyOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [-160, 0],
+      retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
+      credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
+    { parameters: { jsCode: routeAndCall },
+      id: 'a0000000-0000-0000-0000-000000000004', name: 'RouteAndCall', type: 'n8n-nodes-base.code', typeVersion: 2, position: [60, 0] },
+    { parameters: { jsCode: mergeResults },
+      id: 'a0000000-0000-0000-0000-000000000005', name: 'MergeResults', type: 'n8n-nodes-base.code', typeVersion: 2, position: [280, 0] },
+    { parameters: { jsCode: buildSynthesisReq },
+      id: 'a0000000-0000-0000-0000-000000000006', name: 'BuildSynthesisReq', type: 'n8n-nodes-base.code', typeVersion: 2, position: [500, 0] },
+    { parameters: { conditions: { options: { caseSensitive: true, leftValue: '', typeValidation: 'strict' },
+        conditions: [{ id: 'c1', leftValue: '={{ $json.skip_llm }}', rightValue: true, operator: { type: 'boolean', operation: 'true', singleValue: true } }], combinator: 'and' } },
+      id: 'a0000000-0000-0000-0000-000000000007', name: 'IsSkipLLM', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [720, 0] },
+    { parameters: { jsCode: finalizeJs },
+      id: 'a0000000-0000-0000-0000-000000000008', name: 'FinalizeSkip', type: 'n8n-nodes-base.code', typeVersion: 2, position: [940, 80] },
+    { parameters: {
+        method: 'POST', url: 'https://api.openai.com/v1/chat/completions',
+        authentication: 'predefinedCredentialType', nodeCredentialType: 'openAiApi',
+        sendBody: true, specifyBody: 'json', jsonBody: '={{ JSON.stringify($json.oai_body) }}',
+        options: { timeout: 45000 },
+      },
+      id: 'a0000000-0000-0000-0000-000000000009', name: 'SynthOpenAI', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: [940, -80],
+      retryOnFail: true, maxTries: 3, waitBetweenTries: 2000,
+      credentials: { openAiApi: { id: '__OPENAI_CRED_ID__', name: 'OpenAI Dental' } } },
+    { parameters: { jsCode: finalizeJs },
+      id: 'a0000000-0000-0000-0000-00000000000a', name: 'FinalizeSynth', type: 'n8n-nodes-base.code', typeVersion: 2, position: [1160, -80] },
+  ],
+  connections: {
+    Webhook: { main: [[{ node: 'ClassifyIntent', type: 'main', index: 0 }]] },
+    ClassifyIntent: { main: [[{ node: 'ClassifyOpenAI', type: 'main', index: 0 }]] },
+    ClassifyOpenAI: { main: [[{ node: 'RouteAndCall', type: 'main', index: 0 }]] },
+    RouteAndCall: { main: [[{ node: 'MergeResults', type: 'main', index: 0 }]] },
+    MergeResults: { main: [[{ node: 'BuildSynthesisReq', type: 'main', index: 0 }]] },
+    BuildSynthesisReq: { main: [[{ node: 'IsSkipLLM', type: 'main', index: 0 }]] },
+    IsSkipLLM: { main: [[{ node: 'FinalizeSkip', type: 'main', index: 0 }], [{ node: 'SynthOpenAI', type: 'main', index: 0 }]] },
+    SynthOpenAI: { main: [[{ node: 'FinalizeSynth', type: 'main', index: 0 }]] },
+  },
+  settings: { executionOrder: 'v1' },
+});
