@@ -126,6 +126,11 @@
 </div>
 
 <audio id="player" hidden></audio>
-<script src="app.js"></script>
+<!-- ?v= busts the browser cache on real code changes - python's static
+     server sends no Cache-Control headers, so without this a browser that
+     already loaded app.js once (e.g. from an earlier, since-fixed version of
+     a shared demo link) can keep serving that stale cached copy forever,
+     since the request URL never otherwise changes. Bump on every app.js edit. -->
+<script src="app.js?v=2"></script>
 </body>
 </html>
