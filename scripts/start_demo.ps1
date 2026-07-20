@@ -1,12 +1,17 @@
 # Starts the voice client's static server + 3 cloudflared quick tunnels
 # (client, voice-fallback, n8n) and prints one shareable URL with the
-# tunnel addresses baked in as query params. Quick tunnels get a fresh
-# random *.trycloudflare.com hostname every run - re-run this and re-share
-# the printed URL each time you restart the demo.
+# tunnel addresses baked in as query params, plus ?clinic=/?clinic_name= so
+# the link opens straight into a Talk conversation with that clinic instead
+# of landing on Add-a-clinic (a first-time visitor has no saved clinic in
+# localStorage yet). Quick tunnels get a fresh random *.trycloudflare.com
+# hostname every run - re-run this and re-share the printed URL each time
+# you restart the demo.
 param(
   [int]$ClientPort = 8080,
   [int]$VoicePort = 8000,
-  [int]$N8nPort = 5679
+  [int]$N8nPort = 5679,
+  [string]$ClinicUrl = "https://www.deroodeortho.com/",
+  [string]$ClinicName = "De Roode Orthodontics"
 )
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
@@ -56,7 +61,9 @@ $webhookKey = $envMap['N8N_WEBHOOK_API_KEY']
 $voiceEnc = [System.Uri]::EscapeDataString($voiceUrl)
 $n8nEnc = [System.Uri]::EscapeDataString($n8nUrl)
 $keyEnc = [System.Uri]::EscapeDataString($webhookKey)
-$shareUrl = "$clientUrl/?voice=$voiceEnc&n8n=$n8nEnc&key=$keyEnc"
+$clinicEnc = [System.Uri]::EscapeDataString($ClinicUrl)
+$clinicNameEnc = [System.Uri]::EscapeDataString($ClinicName)
+$shareUrl = "$clientUrl/?voice=$voiceEnc&n8n=$n8nEnc&key=$keyEnc&clinic=$clinicEnc&clinic_name=$clinicNameEnc"
 
 Write-Host ""
 Write-Host "=== Share this URL with your team ===" -ForegroundColor Green

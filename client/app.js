@@ -16,10 +16,18 @@
 // how it's passed (query param or otherwise) - it stops casual/automated
 // abuse of a found URL, not a determined person actively using the shared
 // link. scripts/start_demo.ps1 prints the full URL with this included.
+//
+// ?clinic=<website_url>&clinic_name=<name> lets a shared link open straight
+// into a Talk conversation with a specific, already-ingested clinic instead
+// of landing on Add-a-clinic - a stranger's first-ever open of this page has
+// no recall.activeClinic in localStorage yet, so without this param a shared
+// demo link would show the Add screen, not the intended clinic.
 const params = new URLSearchParams(location.search);
 const VOICE_BASE = params.get('voice') || 'http://localhost:8000';
 const N8N_BASE = params.get('n8n') || 'http://localhost:5679';
 const WEBHOOK_KEY = params.get('key') || '';
+const CLINIC_PARAM = params.get('clinic') || '';
+const CLINIC_NAME_PARAM = params.get('clinic_name') || '';
 const BAR_COUNT = 28;
 const RECENT_KEY = 'recall.recentClinics';
 const ACTIVE_KEY = 'recall.activeClinic';
@@ -564,12 +572,18 @@ checkConnection();
 setInterval(checkConnection, 15000);
 renderRecent();
 
-const savedActive = loadActiveClinic();
-if (savedActive) {
-  setActiveClinic(savedActive);
+if (CLINIC_PARAM) {
+  setActiveClinic({ url: CLINIC_PARAM, name: CLINIC_NAME_PARAM || fallbackName(CLINIC_PARAM) });
   setView('talk');
+  resetConversation();
 } else {
-  setView('add');
+  const savedActive = loadActiveClinic();
+  if (savedActive) {
+    setActiveClinic(savedActive);
+    setView('talk');
+  } else {
+    setView('add');
+  }
 }
 
 // Exposed for headless/dev testing (e.g. feeding a prerecorded file through
