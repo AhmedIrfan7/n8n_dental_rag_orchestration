@@ -107,7 +107,7 @@
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000,
+      "waitBetweenTries": 600,
       "credentials": {
         "openAiApi": {
           "id": "__OPENAI_CRED_ID__",
