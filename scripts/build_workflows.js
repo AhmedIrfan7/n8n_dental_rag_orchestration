@@ -98,6 +98,19 @@ writeWf('01_ingestion_pipeline.json', {
       typeVersion: 4.2,
       position: [1300, 0],
     },
+    {
+      // TriggerExtract's (already-unwrapped) response becomes this workflow's
+      // own webhook response (responseMode:'lastNode') - this node just adds
+      // page-coverage info discovered earlier in THIS run (Discover already
+      // saw every page a sitemap/crawl found, before truncating to max_pages)
+      // so a caller can tell a "success" apart from a partial-site ingest.
+      parameters: { jsCode: "const result = $input.first().json; const disc = $('Discover').first().json; return [{ json: Object.assign({}, result, { pages_found: disc.total_found, max_pages: disc.max_pages, truncated: disc.truncated }) }];" },
+      id: 'a1000000-0000-0000-0000-000000000008',
+      name: 'MergeIngestResult',
+      type: 'n8n-nodes-base.code',
+      typeVersion: 2,
+      position: [1520, 0],
+    },
   ],
   connections: {
     Webhook: { main: [[{ node: 'Discover', type: 'main', index: 0 }]] },
@@ -106,6 +119,7 @@ writeWf('01_ingestion_pipeline.json', {
     PreparePages: { main: [[{ node: 'StorePages', type: 'main', index: 0 }]] },
     StorePages: { main: [[{ node: 'Finalize', type: 'main', index: 0 }]] },
     Finalize: { main: [[{ node: 'TriggerExtract', type: 'main', index: 0 }]] },
+    TriggerExtract: { main: [[{ node: 'MergeIngestResult', type: 'main', index: 0 }]] },
   },
   settings: { executionOrder: 'v1' },
 });

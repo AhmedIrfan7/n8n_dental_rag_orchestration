@@ -53,9 +53,15 @@ let results;
 let usedFallback = false;
 if (routed.length === 0) {
   usedFallback = true;
+  // Covers two very different real cases with one message: a plain greeting
+  // ("hello", "hi there") that matches none of the four topic intents by
+  // design, and a genuinely unrelated/unclear question. Both want the same
+  // reply - something warm and inviting rather than the old "I'm not sure I
+  // can help with that", which read as a confused/broken response to a
+  // simple hello and was reported as such.
   results = [{
     intent: 'fallback', ok: true, grounded: false,
-    answer: "I'm not sure I can help with that from what I know about this clinic. Could you rephrase, or ask about services, pricing, hours, or booking an appointment?",
+    answer: "Hi! I'm the clinic's virtual assistant - I can help with services, pricing, hours, or booking an appointment. What would you like to know?",
   }];
 } else {
   results = await Promise.all(routed.map(function (r) { return callAgent(r.name, AGENT_PATHS[r.name]); }));
