@@ -89,7 +89,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Intent Classifier — build the OpenAI request (Code node).\n// Input : this node's own $input is LoadHistory's rows; query/website_url\n//         come from PrepSession, the resolved session id from GetOrCreateSession.\n// Output: { query, session_id, website_url, oai_body }\nconst prep = $('PrepSession').first().json;\nconst query = prep.query;\nconst session_id = $('GetOrCreateSession').first().json.id;\nconst history = $input.first().json.history || []; // [{role, content}] (PackHistory wraps LoadHistory's rows)\n\nconst sys = [\n  'Classify a dental/orthodontic clinic chatbot query into one or more intents.',\n  'Intents: \"pricing\" (cost/price/insurance questions), \"services\" (treatments, FAQs, general dental/ortho questions),',\n  '\"general\" (clinic info: doctors, location, contact, policies, about), \"booking\" (scheduling/appointment requests).',\n  'A query can match multiple intents. Use the recent conversation to resolve follow-ups (\"what about that\", \"and the price?\").',\n  'Return ONLY JSON:',\n  '{ \"intents\": [ { \"name\": \"pricing\"|\"services\"|\"general\"|\"booking\", \"confidence\": 0.0-1.0 } ] }',\n  'Include only intents that are plausibly relevant; omit ones that clearly do not apply.',\n  'If the query is unrelated to a dental/orthodontic clinic (e.g. general trivia, unrelated topics), return { \"intents\": [] }.',\n].join('\\n');\n\nconst historyText = history.length\n  ? 'RECENT CONVERSATION:\\n' + history.map(function (h) { return h.role + ': ' + h.content; }).join('\\n') + '\\n\\n'\n  : '';\n\nreturn [{\n  json: {\n    query, session_id, website_url: prep.website_url,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: historyText + 'LATEST MESSAGE: ' + query },\n      ],\n    },\n  },\n}];\n"
+        "jsCode": "// Intent Classifier — build the OpenAI request (Code node).\n// Input : this node's own $input is LoadHistory's rows; query/website_url\n//         come from PrepSession, the resolved session id from GetOrCreateSession.\n// Output: { query, session_id, website_url, is_greeting, oai_body }\nconst prep = $('PrepSession').first().json;\nconst query = prep.query;\nconst session_id = $('GetOrCreateSession').first().json.id;\nconst history = $input.first().json.history || []; // [{role, content}] (PackHistory wraps LoadHistory's rows)\n\n// A plain greeting/pleasantry (\"hi\", \"thanks\", \"good morning\") matches none\n// of the four real intents by design - it used to still pay for a full\n// OpenAI network round trip just to learn that. Only the ENTIRE message\n// (not a substring) matching one of these conservative patterns short-\n// circuits the classify call - \"hi, how much does invisalign cost\" still\n// goes through the LLM normally, only bare chit-chat skips it.\nfunction isGreeting(q) {\n  const norm = String(q || '').toLowerCase().trim().replace(/[!.?]+$/, '');\n  const patterns = [\n    /^(hi|hello|hey|hiya|yo|howdy)$/,\n    /^(hi|hello|hey)\\s+(there|guys|team)$/,\n    /^good\\s*(morning|afternoon|evening|day)$/,\n    /^how\\s*(are|r)\\s*(you|u)(\\s*doing)?$/,\n    /^what'?s\\s*up$/,\n    /^(thanks|thank you|thank you very much|thx|ty)$/,\n    /^(bye|goodbye|see you|see ya)$/,\n    /^(ok|okay|cool|great|nice|sounds good)$/,\n  ];\n  return patterns.some(function (p) { return p.test(norm); });\n}\n// Only short-circuits the FIRST message of a session - \"thanks\" said mid\n// conversation (after a real question) should not reset to the canned\n// intro reply, only an opening \"hi\" should.\nconst is_greeting = history.length === 0 && isGreeting(query);\n\nconst sys = [\n  'Classify a dental/orthodontic clinic chatbot query into one or more intents.',\n  'Intents: \"pricing\" (cost/price/insurance questions), \"services\" (treatments, FAQs, general dental/ortho questions),',\n  '\"general\" (clinic info: doctors, location, contact, policies, about), \"booking\" (scheduling/appointment requests).',\n  'A query can match multiple intents. Use the recent conversation to resolve follow-ups (\"what about that\", \"and the price?\").',\n  'Return ONLY JSON:',\n  '{ \"intents\": [ { \"name\": \"pricing\"|\"services\"|\"general\"|\"booking\", \"confidence\": 0.0-1.0 } ] }',\n  'Include only intents that are plausibly relevant; omit ones that clearly do not apply.',\n  'If the query is unrelated to a dental/orthodontic clinic (e.g. general trivia, unrelated topics), return { \"intents\": [] }.',\n].join('\\n');\n\nconst historyText = history.length\n  ? 'RECENT CONVERSATION:\\n' + history.map(function (h) { return h.role + ': ' + h.content; }).join('\\n') + '\\n\\n'\n  : '';\n\nreturn [{\n  json: {\n    query, session_id, website_url: prep.website_url, is_greeting,\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0,\n      response_format: { type: 'json_object' },\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: historyText + 'LATEST MESSAGE: ' + query },\n      ],\n    },\n  },\n}];\n"
       },
       "id": "a0000000-0000-0000-0000-000000000002",
       "name": "ClassifyIntent",
@@ -98,6 +98,51 @@
       "position": [
         -200,
         0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "g1",
+              "leftValue": "={{ $json.is_greeting }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "a0000000-0000-0000-0000-00000000000g",
+      "name": "IsGreeting",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        20,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { choices: [{ message: { content: JSON.stringify({ intents: [] }) } }] } }];"
+      },
+      "id": "a0000000-0000-0000-0000-00000000000h",
+      "name": "ClassifySkipOpenAI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        140
       ]
     },
     {
@@ -119,11 +164,11 @@
       "typeVersion": 4.2,
       "position": [
         20,
-        0
+        -140
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000,
+      "waitBetweenTries": 600,
       "credentials": {
         "openAiApi": {
           "id": "__OPENAI_CRED_ID__",
@@ -159,7 +204,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Synthesizer request builder — n8n Code node.\n// Merges the (already-grounded-safe) sub-agent answers into ONE professional\n// reply - but ONLY when there's genuinely more than one answer to merge.\n// A single sub-agent's answer is already a complete, well-formed reply (see\n// rag/build_answer_req.js's own system prompt), so running it through a\n// second LLM pass just to \"sound nice\" was pure added latency for the\n// common case (one topic per question) - this used to cost a whole extra\n// gpt-4o round trip on top of classify + the sub-agent's own call, which\n// was the single biggest contributor to response time. Only 2+ genuinely\n// different sub-agent answers need an actual merge pass.\nconst d = $input.first().json;\n\nconst FALLBACK_MESSAGE = \"Hi! I'm the clinic's virtual assistant - I can help with services, pricing, hours, or booking an appointment. What would you like to know?\";\n\nif (d.used_fallback || d.answers.length <= 1) {\n  return [{\n    json: {\n      query: d.query, session_id: d.session_id,\n      skip_llm: true,\n      final_answer: (d.answers[0] && d.answers[0].text) || FALLBACK_MESSAGE,\n    },\n  }];\n}\n\nconst bundle = d.answers.map(function (a, i) {\n  return '[' + (i + 1) + '] (' + a.intent + (a.grounded ? '' : ', not grounded') + ') ' + a.text;\n}).join('\\n\\n');\n\nconst sys = [\n  'You are the front-desk voice/chat assistant for a dental/orthodontic clinic.',\n  'Combine the sub-agent answers below into ONE natural, warm, professional reply to the patient.',\n  'Do not add any fact not present in the sub-agent answers. Do not repeat the same point twice.',\n  'If some answers say information is unavailable, acknowledge that briefly rather than glossing over it.',\n  'Keep it concise (<= 100 words), no bullet points, no citation markers - just plain conversational text suitable for text-to-speech.',\n].join('\\n');\n\nconst user = 'PATIENT QUESTION: ' + d.query + '\\n\\nSUB-AGENT ANSWERS:\\n' + bundle;\n\nreturn [{\n  json: {\n    query: d.query, session_id: d.session_id,\n    skip_llm: false,\n    // gpt-4o-mini, not gpt-4o: this pass only merges/rewrites 2-4 short\n    // already-correct paragraphs into one - it doesn't need frontier\n    // reasoning, and mini is meaningfully faster for the same task.\n    oai_body: {\n      model: 'gpt-4o-mini',\n      temperature: 0.3,\n      messages: [\n        { role: 'system', content: sys },\n        { role: 'user', content: user },\n      ],\n    },\n  },\n}];\n"
+        "jsCode": "// Synthesizer request builder — n8n Code node.\r\n// Merges the (already-grounded-safe) sub-agent answers into ONE professional\r\n// reply - but ONLY when there's genuinely more than one answer to merge.\r\n// A single sub-agent's answer is already a complete, well-formed reply (see\r\n// rag/build_answer_req.js's own system prompt), so running it through a\r\n// second LLM pass just to \"sound nice\" was pure added latency for the\r\n// common case (one topic per question) - this used to cost a whole extra\r\n// gpt-4o round trip on top of classify + the sub-agent's own call, which\r\n// was the single biggest contributor to response time. Only 2+ genuinely\r\n// different sub-agent answers need an actual merge pass.\r\nconst d = $input.first().json;\r\n\r\nconst FALLBACK_MESSAGE = \"Hi! I'm the clinic's virtual assistant - I can help with services, pricing, hours, or booking an appointment. What would you like to know?\";\r\n\r\nif (d.used_fallback || d.answers.length <= 1) {\r\n  return [{\r\n    json: {\r\n      query: d.query, session_id: d.session_id,\r\n      skip_llm: true,\r\n      final_answer: (d.answers[0] && d.answers[0].text) || FALLBACK_MESSAGE,\r\n    },\r\n  }];\r\n}\r\n\r\nconst bundle = d.answers.map(function (a, i) {\r\n  return '[' + (i + 1) + '] (' + a.intent + (a.grounded ? '' : ', not grounded') + ') ' + a.text;\r\n}).join('\\n\\n');\r\n\r\nconst sys = [\r\n  'You are the front-desk voice/chat assistant for a dental/orthodontic clinic.',\r\n  'Combine the sub-agent answers below into ONE natural, warm, professional reply to the patient.',\r\n  'Do not add any fact not present in the sub-agent answers. Do not repeat the same point twice.',\r\n  'If some answers say information is unavailable, acknowledge that briefly rather than glossing over it.',\r\n  'Keep it concise (<= 100 words), no bullet points, no citation markers - just plain conversational text suitable for text-to-speech.',\r\n].join('\\n');\r\n\r\nconst user = 'PATIENT QUESTION: ' + d.query + '\\n\\nSUB-AGENT ANSWERS:\\n' + bundle;\r\n\r\nreturn [{\r\n  json: {\r\n    query: d.query, session_id: d.session_id,\r\n    skip_llm: false,\r\n    // gpt-4o-mini, not gpt-4o: this pass only merges/rewrites 2-4 short\r\n    // already-correct paragraphs into one - it doesn't need frontier\r\n    // reasoning, and mini is meaningfully faster for the same task.\r\n    oai_body: {\r\n      model: 'gpt-4o-mini',\r\n      temperature: 0.3,\r\n      messages: [\r\n        { role: 'system', content: sys },\r\n        { role: 'user', content: user },\r\n      ],\r\n    },\r\n  },\r\n}];\r\n"
       },
       "id": "a0000000-0000-0000-0000-000000000006",
       "name": "BuildSynthesisReq",
@@ -238,7 +283,7 @@
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 2000,
+      "waitBetweenTries": 600,
       "credentials": {
         "openAiApi": {
           "id": "__OPENAI_CRED_ID__",
@@ -381,7 +426,36 @@
       "main": [
         [
           {
+            "node": "IsGreeting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IsGreeting": {
+      "main": [
+        [
+          {
+            "node": "ClassifySkipOpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "ClassifyOpenAI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ClassifySkipOpenAI": {
+      "main": [
+        [
+          {
+            "node": "RouteAndCall",
             "type": "main",
             "index": 0
           }
