@@ -14,6 +14,7 @@ no GPU dependency at all).
 
 import io
 import os
+import subprocess
 import tempfile
 import wave
 from pathlib import Path
@@ -96,9 +97,28 @@ async def transcribe(
         Path(tmp_path).unlink(missing_ok=True)
 
 
+def encode_mp3(wav_bytes: bytes) -> bytes:
+    """Piper's raw WAV output is uncompressed (~44KB/sec of audio) - fine on
+    localhost, but painfully slow to transfer over a real network (a normal
+    reply-length WAV comes out to roughly 1MB). ffmpeg (already in this
+    image) re-encodes it to MP3 at a speech-appropriate bitrate, which cuts
+    that by roughly 10x with no perceptible quality loss for spoken text -
+    this was the actual bottleneck reported between "text appears" and
+    "audio starts playing" on a real (non-localhost) connection, not
+    synthesis time itself (which was already sub-second).
+    """
+    proc = subprocess.run(
+        ["ffmpeg", "-loglevel", "error", "-i", "pipe:0", "-f", "mp3", "-codec:a", "libmp3lame", "-b:a", "48k", "pipe:1"],
+        input=wav_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise RuntimeError("ffmpeg mp3 encode failed: " + proc.stderr.decode(errors="replace"))
+    return proc.stdout
+
+
 @app.post("/speak")
 async def speak(payload: dict):
-    """{text, voice?} -> raw WAV audio bytes (synchronous, no job polling)."""
+    """{text, voice?} -> MP3 audio bytes (synchronous, no job polling)."""
     text = (payload.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
@@ -107,5 +127,15 @@ async def speak(payload: dict):
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav_file:
         voice.synthesize(text, wav_file)
-    audio_bytes = buf.getvalue()
-    return Response(content=audio_bytes, media_type="audio/wav")
+    wav_bytes = buf.getvalue()
+
+    try:
+        audio_bytes = encode_mp3(wav_bytes)
+        media_type = "audio/mpeg"
+    except Exception:
+        # Never let a broken/missing encoder take down voice replies entirely -
+        # fall back to the original (larger but always-correct) WAV bytes.
+        audio_bytes = wav_bytes
+        media_type = "audio/wav"
+
+    return Response(content=audio_bytes, media_type=media_type)

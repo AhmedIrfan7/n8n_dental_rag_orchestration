@@ -23,8 +23,6 @@ RUN mkdir -p /app/voices && \
     curl --retry 10 --retry-all-errors --retry-delay 5 -fsSL -o /app/voices/${PIPER_VOICE}.onnx.json \
       "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/${PIPER_VOICE}.onnx.json"
 
-COPY app.py .
-
 # Pre-download the Whisper model so the container's first real request isn't
 # slowed down by (or fails on) a cold download. "base" gives meaningfully
 # better accuracy on domain terms (e.g. "Invisalign") than "tiny" - worth
@@ -33,6 +31,14 @@ COPY app.py .
 ARG WHISPER_MODEL_SIZE=base
 ENV HF_HUB_DOWNLOAD_TIMEOUT=300
 RUN python -c "from faster_whisper import WhisperModel; WhisperModel('${WHISPER_MODEL_SIZE}', device='cpu', compute_type='int8')"
+
+# COPY app.py comes AFTER every model download, not before - app.py changes
+# on every code iteration, and Docker invalidates every layer after the one
+# that changed. With this ordering, an app.py-only change (the common case)
+# never re-triggers the whisper/piper downloads above, which matters a lot
+# on a slow connection (previously re-downloaded the whisper model on every
+# single code change, taking many minutes each time for no reason).
+COPY app.py .
 
 ENV WHISPER_MODEL_SIZE=${WHISPER_MODEL_SIZE}
 ENV PIPER_VOICE=${PIPER_VOICE}
