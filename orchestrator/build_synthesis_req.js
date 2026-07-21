@@ -1,17 +1,23 @@
 // Synthesizer request builder — n8n Code node.
 // Merges the (already-grounded-safe) sub-agent answers into ONE professional
-// reply. If no sub-agent ran (used_fallback) or produced an answer, skip the
-// LLM call entirely and pass the safe deflection straight through - never
-// hand a fully-unrelated query to a "make it sound nice" pass.
+// reply - but ONLY when there's genuinely more than one answer to merge.
+// A single sub-agent's answer is already a complete, well-formed reply (see
+// rag/build_answer_req.js's own system prompt), so running it through a
+// second LLM pass just to "sound nice" was pure added latency for the
+// common case (one topic per question) - this used to cost a whole extra
+// gpt-4o round trip on top of classify + the sub-agent's own call, which
+// was the single biggest contributor to response time. Only 2+ genuinely
+// different sub-agent answers need an actual merge pass.
 const d = $input.first().json;
 
-if (d.used_fallback || d.answers.length === 0) {
+const FALLBACK_MESSAGE = "Hi! I'm the clinic's virtual assistant - I can help with services, pricing, hours, or booking an appointment. What would you like to know?";
+
+if (d.used_fallback || d.answers.length <= 1) {
   return [{
     json: {
       query: d.query, session_id: d.session_id,
       skip_llm: true,
-      final_answer: (d.answers[0] && d.answers[0].text) ||
-        "I'm not sure I can help with that from what I know about this clinic. Could you ask about services, pricing, hours, or booking an appointment?",
+      final_answer: (d.answers[0] && d.answers[0].text) || FALLBACK_MESSAGE,
     },
   }];
 }
@@ -34,8 +40,11 @@ return [{
   json: {
     query: d.query, session_id: d.session_id,
     skip_llm: false,
+    // gpt-4o-mini, not gpt-4o: this pass only merges/rewrites 2-4 short
+    // already-correct paragraphs into one - it doesn't need frontier
+    // reasoning, and mini is meaningfully faster for the same task.
     oai_body: {
-      model: 'gpt-4o',
+      model: 'gpt-4o-mini',
       temperature: 0.3,
       messages: [
         { role: 'system', content: sys },
